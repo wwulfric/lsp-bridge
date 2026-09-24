@@ -15,6 +15,7 @@ class Context:
     mode: str = 'jump'
     language: str = ''
     config: dict = field(default_factory=dict)
+    origin: dict = field(default_factory=dict)  # Original project file + verified source HTML
 
 
 @dataclass

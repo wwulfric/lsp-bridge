@@ -1,4 +1,4 @@
-"""One isolated task per helper; JSON on stdin/stdout, progress on stderr."""
+"""Serial local resolver session; installations remain isolated one-shot tasks."""
 import json
 import sys
 from pathlib import Path
@@ -7,16 +7,19 @@ if __package__ in (None, ''):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from core.source import Context, MANAGERS, provider
-from core.source import install
+from core.source import install, session
 
 
-def main():
-    request = json.loads(sys.stdin.readline())
+def dispatch(request, cache):
     install.CANCEL = request.pop('cancel', None)
     action = request.pop('action')
     context = Context(**request)
-    instance = provider(context)
     try:
+        if action == 'resolve':
+            cache.begin(context)
+        else:
+            session.ACTIVE = None
+        instance = provider(context)
         if instance is None:
             output = {'message': MANAGERS.get(context.language, 'Sources are managed by the language server/toolchain')}
         elif action == 'install':
@@ -28,9 +31,24 @@ def main():
             result = instance.resolve(context)
             output = result.json() if result else {}
         install.check_cancel()
-        print(json.dumps({'ok': True, 'result': output}), flush=True)
+        return {'ok': True, 'result': output}
     except Exception as error:
-        print(json.dumps({'ok': False, 'error': str(error)}), flush=True)
+        cache.commands.clear()  # Do not retain failures or cancellations.
+        return {'ok': False, 'error': str(error)}
+    finally:
+        session.ACTIVE = None
+
+
+def main():
+    cache = session.Session()
+    for line in sys.stdin:
+        try:
+            output = dispatch(json.loads(line), cache)
+        except Exception as error:
+            output = {'ok': False, 'error': str(error)}
+        print(json.dumps(output), flush=True)
+        if '--server' not in sys.argv:
+            break
 
 
 if __name__ == '__main__':

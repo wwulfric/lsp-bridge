@@ -1,6 +1,6 @@
 # External source navigation
 
-This opt-in feature adds a **local-only Haskell import fallback** after an empty
+This opt-in feature adds a **local-only Haskell import fallback and continuous source navigation** after an empty
 or missing-file definition response. Valid LSP files and the existing Java,
 Deno and C# virtual document resolvers retain their current paths and sessions.
 Type definitions, implementations and multiple-result selection are unchanged.
@@ -28,7 +28,11 @@ starts a new download. Existing language-server download policies are unchanged.
 - `lsp-bridge-source-open-documentation`: open the latest local Haddock source
   page, or resolve the import at point for documentation.
 
-At most two helpers run concurrently (`lsp-bridge-source-max-tasks`). Repeated
+At most two tasks run concurrently (`lsp-bridge-source-max-tasks`). Local
+resolution uses one serial, reusable helper; installation/status tasks are
+isolated. The idle resolver keeps bounded in-memory metadata and HTML caches,
+not additional copies of sources. `lsp-bridge-source-cancel` also stops this
+resolver, clearing its caches; the next lookup starts it again. Repeated
 install requests from the same project/configuration are merged. A per-GHC OS
 lock also coalesces installations from different projects or Emacs instances.
 An installation never replays a previous click. Move the cursor, edit, switch
@@ -76,7 +80,7 @@ and the provider's own cache are indexed, never arbitrary disk locations.
 The resolver reads **unsaved buffer text**. It supports module names, aliases,
 qualified/postpositive-qualified imports and named imports across lines. It
 excludes comments, hiding-list items, operators, package-qualified imports,
-CPP-conditional files and body references. Source links identify re-exported
+CPP-conditional files and body references in project buffers. Source links identify re-exported
 implementation modules. The exact HTML anchor/line, module declaration and
 source text must agree; no same-name symbol guessing or semantic index is used.
 Generated/preprocessed files whose line/text cannot be verified stay in HTML.
@@ -85,6 +89,41 @@ A missing `.hs` target opens local HTML during ordinary navigation. Peek only
 shows a documentation-command hint. Verified external files open read-only,
 without starting another language server, and use the existing jump history,
 other-window and Peek mechanisms. Already-open user buffers retain their state.
+
+## Reading and continuing through external sources
+
+Verified source buffers enable `lsp-bridge-source-mode`, with `M-.` for definition
+and `M-,` to return. They retain the originating project, exact package context
+and installed source HTML, without loading HLS or the GHC checkout's cradle.
+Inside these buffers, definition/Peek uses the Haddock link at the clicked
+occurrence, including same-file and cross-file links. Hidden type annotations
+are excluded when mapping the visible HTML line and Unicode column. Both the
+clicked line and target source line must match. Missing/ambiguous links or
+changed text never trigger a same-name search. Files without matching installed
+hyperlinked Haddock remain outside this capability.
+
+Personal mouse bindings can be shared with the reading mode, for example:
+
+```elisp
+(define-key lsp-bridge-source-mode-map (kbd "<s-down-mouse-1>") #'ignore)
+(define-key lsp-bridge-source-mode-map (kbd "<s-mouse-1>") #'my/lsp-click)
+```
+
+The example refers to your existing click command; the package does not define
+`my/lsp-click` or impose a platform-specific mouse gesture. Existing open user
+buffers retain their editability and server state.
+
+The resolver reuses successful tool queries while the environment remains
+unchanged. Plan/project configuration, executable paths and symlink targets,
+package database/cache changes invalidate the session's tool results. A
+60-second maximum lifetime also bounds reuse for opaque tool wrappers; use
+`lsp-bridge-source-cancel` to refresh immediately after changing such a wrapper's
+hidden configuration. Interpreter/environment or working-directory changes
+restart the helper. HTML caches are keyed by file metadata; source text,
+manifest and module indexes are rechecked for every lookup. Failed tool queries
+and cancelled requests are not cached. A first lookup or a newly visited HTML
+module still incurs discovery/parsing cost; normal project definitions retain
+LSP priority, including its response latency.
 
 ## Managed cache
 

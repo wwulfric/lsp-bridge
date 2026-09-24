@@ -7,15 +7,21 @@ import shutil
 import subprocess
 import sys
 from html.parser import HTMLParser
+from functools import lru_cache
+from dataclasses import replace
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
+from urllib.request import url2pathname
 
 from . import Result
+from . import session
 
 
 def run(command, *args):
-    return subprocess.check_output([command, *args], text=True, encoding='utf-8',
-                                   stderr=subprocess.PIPE, timeout=20).strip()
+    def execute():
+        return subprocess.check_output([command, *args], text=True, encoding='utf-8',
+                                       stderr=subprocess.PIPE, timeout=20).strip()
+    return session.ACTIVE.run((command, *args), execute) if session.ACTIVE else execute()
 
 
 def mask_comments(text):
@@ -118,7 +124,7 @@ class HTML(HTMLParser):
 
 
 def source_link(document, symbol):
-    tree = HTML(document.read_text(encoding='utf-8')).root
+    tree = html_tree(document)
     scopes = [tree] if not symbol else [n for n in tree.nodes() if n.tag == 'p' and any(
         c.attrs.get('id') in ('v:' + symbol, 't:' + symbol) for c in n.nodes())]
     for scope in scopes:
@@ -133,30 +139,76 @@ def source_link(document, symbol):
     return None
 
 
-def source_location(path, fragment):
-    tree = HTML(path.read_text(encoding='utf-8')).root
+@lru_cache(maxsize=16)
+def _html_tree(path, stamp):
+    return HTML(Path(path).read_text(encoding='utf-8')).root
+
+
+def html_tree(path):
+    return _html_tree(str(path), session.stamp(path))
+
+
+@lru_cache(maxsize=16)
+def _source_map(path, stamp):
+    tree = html_tree(Path(path))
     pre = next((n for n in tree.nodes() if n.tag == 'pre'), None)
-    if pre is None:
-        return None
-    line, target, lines = 1, None, {}
+    line, column, lines, anchors, links = 1, 0, {}, {}, []
     def walk(node):
-        nonlocal line, target
+        nonlocal line, column
         if isinstance(node, str):
+            # Haddock line-N anchors define source rows, including blank rows.
             lines[line] = lines.get(line, '') + node
+            column += len(node)
             return
         if 'annottext' in node.attrs.get('class', '').split():
             return
         anchor = node.attrs.get('id', '')
         if re.fullmatch(r'line-\d+', anchor):
-            line = int(anchor[5:])
-        if anchor == fragment and fragment:
-            target = line
+            line, column = int(anchor[5:]), 0
+        if anchor:
+            anchors[anchor] = (line, column)
+        start = line, column
         for child in node.children:
             walk(child)
-    walk(pre)
-    if not fragment:
-        target = next((n for n, text in lines.items() if re.search(r'\bmodule\s+', text)), None)
+        if node.tag == 'a' and node.attrs.get('href') and start[0] == line:
+            links.append((line, start[1], column, node.attrs['href']))
+    if pre:
+        walk(pre)
+    return lines, anchors, links
+
+
+def source_map(path):
+    return _source_map(str(path), session.stamp(path))
+
+
+def source_location(path, fragment):
+    lines, anchors, _ = source_map(path)
+    target = anchors.get(fragment, (None, 0))[0] if fragment else next(
+        (n for n, text in lines.items() if re.search(r'\bmodule\s+', text)), None)
     return (target, lines.get(target, '').strip()) if target else None
+
+
+def occurrence_link(path, text, point):
+    """Resolve a clicked occurrence, never a symbol-name search.
+
+    point is a Unicode offset, independent of LSP encodings and tab width.
+    Unsaved changes on the clicked line invalidate the HTML correspondence.
+    """
+    if not 0 <= point < len(text):
+        return None
+    line = text.count('\n', 0, point) + 1
+    column = point - (text.rfind('\n', 0, point) + 1)
+    lines, _, links = source_map(path)
+    if lines.get(line, '').rstrip('\r\n') != text.split('\n')[line - 1].rstrip('\r'):
+        return None
+    matches = {href for n, start, end, href in links if n == line and start <= column < end}
+    if len(matches) != 1:
+        return None
+    parts = urlsplit(matches.pop())
+    if parts.scheme or parts.netloc or not parts.fragment:
+        return None
+    target = (path.parent / unquote(parts.path)).resolve() if parts.path else path
+    return (target, unquote(parts.fragment)) if target.is_file() else None
 
 
 def cache_root(config):
@@ -209,6 +261,7 @@ class Haskell:
             raise ValueError('Unrecognized GHC version')
         pkg_version = run(pkg, '--version').split()[-1]
         global_db = Path(run(ghc, '--print-global-package-db')).resolve()
+        session.database(global_db)
         package_db = Path(run(pkg, '--global', 'list').splitlines()[0].rstrip(':')).resolve()
         if global_db != package_db:
             raise ValueError('GHC and ghc-pkg global package databases differ')
@@ -223,6 +276,7 @@ class Haskell:
         databases = list(config.get('package_dbs', []))
         if plan:
             local_db = project / 'dist-newstyle/packagedb' / ('ghc-' + version)
+            session.database(local_db)
             if local_db.is_dir():
                 databases.append(str(local_db))
             if shutil.which('cabal'):
@@ -233,13 +287,21 @@ class Haskell:
                         identities.insert(0, 'ghc-' + version + '-' + plan['compiler-abi'])
                     for identity in identities:
                         store_db = store / identity / 'package.db'
+                        session.database(store_db)
                         if store_db.is_dir():
                             databases.append(str(store_db))
                             break
                 except (OSError, subprocess.SubprocessError):
                     pass  # Older Cabal: explicit package_dbs remains available.
+        if session.ACTIVE:
+            # Discover the exact user DB, including its currently absent path.
+            user_listing = run(pkg, '--user', 'list')
+            for row in user_listing.splitlines():
+                if row and not row[0].isspace() and row.rstrip().endswith(':'):
+                    session.database(row.rstrip().rstrip(':'))
         args = ['--global', '--user']
         for db in dict.fromkeys(databases):
+            session.database(db)
             args.extend(['--package-db', str(Path(db).expanduser())])
         self.pkg, self.pkg_args, self.units = pkg, args, units
         if not plan:
@@ -292,6 +354,24 @@ class Haskell:
     def resolve(self, context, result=None):
         from .install import check_cancel
         check_cancel()
+        if context.origin:
+            # Source buffers retain the originating project/toolchain, not a GHC checkout cradle.
+            project_context = replace(context, file=context.origin['file'], origin={})
+            self.probe(project_context)
+            parts = urlsplit(context.origin.get('documentation', ''))
+            if parts.scheme != 'file' or parts.netloc:
+                return None
+            html = Path(url2pathname(parts.path))
+            # Verify that this is the installed documentation for the current source module.
+            if not self.owner(html):
+                return None
+            original = self.map_source(project_context, html, '')
+            if not original or original.kind != 'source' or Path(original.path).resolve() != Path(context.file).resolve():
+                return None
+            link = occurrence_link(html, context.text, context.point)
+            if not link:
+                return None
+            return self.map_source(project_context, *link)
         target = import_target(context.text, context.point)
         if not target:
             return None
@@ -306,7 +386,22 @@ class Haskell:
         url = document.as_uri() + (('#v:' + symbol) if symbol else '')
         if not link:
             return Result(documentation=url, message='No local Haddock Source link')
-        html, fragment = link
+        return self.map_source(context, *link, symbol=symbol)
+
+    def owner(self, html):
+        real_module = html.stem
+        if not re.fullmatch(r"[A-Z][\w']*(?:\.[A-Z][\w']*)*", real_module):
+            return None
+        owners = set()
+        for candidate in set(self.pkg_run('find-module', real_module, '--simple-output', '--show-unit-ids').split()):
+            if candidate in self.units:
+                raw = self.pkg_run('--ipid', 'field', candidate, 'haddock-html', '--simple-output')
+                if any(html.resolve().is_relative_to(Path(d).resolve()) for d in package_paths(raw)):
+                    owners.add(candidate)
+        return owners.pop() if len(owners) == 1 else None
+
+    def map_source(self, context, html, fragment, symbol=None):
+        from .install import check_cancel
         url = html.as_uri() + (('#' + fragment) if fragment else '')
         fallback = Result(documentation=url, message='No verified .hs source; use lsp-bridge-source-install')
         location = source_location(html, fragment)
@@ -316,17 +411,7 @@ class Haskell:
         real_module = html.stem
         if not re.fullmatch(r'[A-Z][\w\']*(?:\.[A-Z][\w\']*)*', real_module):
             return fallback
-        # Identify re-export destination by the registered exact package's doc root.
-        owner = None
-        for candidate in set(self.pkg_run('find-module', real_module, '--simple-output', '--show-unit-ids').split()):
-            if candidate not in self.units:
-                continue
-            raw = self.pkg_run('--ipid', 'field', candidate, 'haddock-html', '--simple-output')
-            directories = package_paths(raw)
-            if any(html.is_relative_to(Path(d).resolve()) for d in directories):
-                if owner and owner != candidate:
-                    return fallback
-                owner = candidate
+        owner = self.owner(html)
         if not owner:
             return fallback
         matches = []
@@ -363,7 +448,8 @@ class Haskell:
                 if not re.search(r'^\s*module\s+' + re.escape(real_module) + r'\b', mask_comments(text), re.M):
                     continue
                 lines = text.splitlines()
-                if not 0 < line <= len(lines) or lines[line - 1].strip() != definition or not definition:
+                html_line = source_map(html)[0].get(line, '').rstrip('\r\n')
+                if not 0 < line <= len(lines) or lines[line - 1] != html_line or not definition:
                     continue
                 if symbol and not re.search(r'(?<![\w\'])' + re.escape(symbol) + r'(?![\w\'])', definition):
                     continue
@@ -371,6 +457,7 @@ class Haskell:
         if len(set(matches)) != 1:
             return fallback
         return Result(kind='source', path=str(matches[0]), line=line - 1,
+                      character=source_map(html)[1].get(fragment, (line, 0))[1],
                       documentation=url, message='Verified against exact installed Haddock')
 
     def prepare(self, context):
