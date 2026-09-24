@@ -10,7 +10,8 @@ class PeekFindDefine(Handler):
     method = "textDocument/definition"
     cancel_on_change = True
 
-    def process_request(self, position) -> dict:
+    def process_request(self, position, source_context=None) -> dict:
+        self.source_context = source_context
         self.pos = position
         return dict(position=position)
 

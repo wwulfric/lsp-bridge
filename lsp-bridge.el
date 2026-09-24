@@ -90,6 +90,7 @@
 (require 'lsp-bridge-ref)
 (require 'lsp-bridge-jdtls)
 (require 'lsp-bridge-peek)
+(require 'lsp-bridge-source)
 (require 'lsp-bridge-call-hierarchy)
 (require 'lsp-bridge-code-action)
 (require 'lsp-bridge-diagnostic)
@@ -2237,8 +2238,11 @@ Off by default."
    (t
     (setq-local lsp-bridge-jump-to-def-in-other-window nil)
     (if (lsp-bridge-has-lsp-server-p)
-        (lsp-bridge-call-file-api "find_define" (lsp-bridge--position))
-      (lsp-bridge-find-def-fallback (lsp-bridge--position))))))
+        (lsp-bridge-source--request "find_define" (lsp-bridge--position))
+      (let* ((position (lsp-bridge--position))
+             (id (lsp-bridge-source--capture "jump" position)))
+        (if id (lsp-bridge-source--fallback buffer-file-name id position)
+          (lsp-bridge-find-def-fallback position)))))))
 
 (defun lsp-bridge-find-def-other-window ()
   (interactive)
@@ -2250,8 +2254,11 @@ Off by default."
    (t
     (setq-local lsp-bridge-jump-to-def-in-other-window t)
     (if (lsp-bridge-has-lsp-server-p)
-        (lsp-bridge-call-file-api "find_define" (lsp-bridge--position))
-      (lsp-bridge-find-def-fallback (lsp-bridge--position))))))
+        (lsp-bridge-source--request "find_define" (lsp-bridge--position))
+      (let* ((position (lsp-bridge--position))
+             (id (lsp-bridge-source--capture "jump" position)))
+        (if id (lsp-bridge-source--fallback buffer-file-name id position)
+          (lsp-bridge-find-def-fallback position)))))))
 
 (defun lsp-bridge-find-def-return ()
   "Pop off lsp-bridge-mark-ring and jump to the top location."

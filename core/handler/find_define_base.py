@@ -1704,12 +1704,21 @@ def _try_solidity_fallback(obj, define_jump_handler):
     return False
 
 
+def _source_fallback(obj):
+    # Only definition/Peek requests carry this optional token. No type/implementation changes.
+    token = getattr(obj, "source_context", None)
+    if token and obj.name in ("find_define", "peek_find_definition"):
+        eval_in_emacs("lsp-bridge-source--fallback", obj.file_action.filepath, token, obj.pos)
+    else:
+        eval_in_emacs("lsp-bridge-find-def-fallback", obj.pos)
+
+
 def find_define_response(obj, response, define_jump_handler) -> None:
     if not response:
         # For Solidity: empty response is common for named imports — try recovery.
         if _try_solidity_fallback(obj, define_jump_handler):
             return
-        eval_in_emacs("lsp-bridge-find-def-fallback", obj.pos)
+        _source_fallback(obj)
         return
 
     file_info = response[0] if isinstance(response, list) else response
@@ -1738,7 +1747,7 @@ def find_define_response(obj, response, define_jump_handler) -> None:
     else:
         # for normal file uri
         filepath = uri_to_path(file_uri)
-        if not filepath or os.path.isdir(filepath):
+        if not filepath or os.path.isdir(filepath) or (getattr(obj, "source_context", None) and not os.path.isfile(filepath)):
             server_name = ""
             if getattr(obj.file_action, "single_server", None) is not None:
                 server_name = obj.file_action.single_server.server_info.get("name", "")
@@ -1752,7 +1761,7 @@ def find_define_response(obj, response, define_jump_handler) -> None:
 
                 message_emacs("No definition found: language server returned root URI placeholder (file:///).")
 
-            eval_in_emacs("lsp-bridge-find-def-fallback", obj.pos)
+            _source_fallback(obj)
             return
         obj.file_action.create_external_file_action(filepath)
         eval_in_emacs(define_jump_handler, filepath, get_lsp_file_host(), start_pos)

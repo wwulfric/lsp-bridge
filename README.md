@@ -673,3 +673,7 @@ lsp-bridge's rapid development couldn't have been possible without the strong su
 <a href = "https://github.com/manateelazycat/lsp-bridge/graphs/contributors">
   <img src = "https://contrib.rocks/image?repo=manateelazycat/lsp-bridge"/>
 </a>
+
+## External source navigation / 外部源码导航
+
+See [external source providers](docs/external-sources.md) for opt-in local Haskell import navigation and explicit GHC source installation.

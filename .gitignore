@@ -9,3 +9,4 @@ workspace/
 .aider*
 .env
 .omx/
+/.test-deps/

@@ -625,7 +625,7 @@ When FORCE if non-nil, the content of the peek window is recalculated."
   (interactive)
   (setq lsp-bridge-peek-symbol-at-point (make-list 7 nil))
   (setf (nth 0 lsp-bridge-peek-symbol-at-point) (symbol-at-point))
-  (lsp-bridge-call-file-api "peek_find_definition" (lsp-bridge--position)))
+  (lsp-bridge-source--request "peek_find_definition" (lsp-bridge--position)))
 
 (defun lsp-bridge-peek--error-if-not-peeking ()
   "Throw an error if not in a peek session."
