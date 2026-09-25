@@ -159,6 +159,21 @@ cross-language symbol index is added. Dedicated environment diagnostics and a
 JS/TS source-definition capability command are future extensions. Remote source
 installation is unsupported.
 
+## Editor integration
+
+`lsp-bridge-source-buffer-p` identifies managed read-only source buffers.
+`lsp-bridge-source-origin-directory` returns their originating project directory
+(possibly a subdirectory), without requiring the original buffer to stay open.
+Both accept an optional buffer argument.  A shared source buffer retains the
+most recent navigation's origin.
+
+`lsp-bridge-source-context-update-hook` runs in the target buffer after each
+context assignment, including reuse and source-to-source navigation.  Personal
+project, title and tab integrations can use these APIs without inspecting
+internal state or changing `buffer-file-name` or `default-directory`.
+Use `lsp-bridge-source-mode-hook` to clean up when the mode is disabled.
+Already-open editable files are not converted to managed source buffers.
+
 ## Verification
 
 From the lsp-bridge checkout:

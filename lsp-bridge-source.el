@@ -69,6 +69,25 @@ Example: ((\"compiler\" . \"ghc-9.12.2\") (\"unit\" . \"base-4.21.0.0-958c\")
 (defvar-local lsp-bridge-source--context nil)
 (defvar-local lsp-bridge-source--documentation nil)
 (defvar-local lsp-bridge-source--reading nil)
+
+(defvar lsp-bridge-source-context-update-hook nil
+  "Hook run in a managed source buffer after its origin is updated.
+This also runs when an existing source buffer is reused by another project.
+Use `lsp-bridge-source-mode-hook' to observe mode deactivation.")
+
+(defun lsp-bridge-source-buffer-p (&optional buffer)
+  "Return non-nil if BUFFER is a managed external source buffer.
+BUFFER defaults to the current buffer."
+  (with-current-buffer (or buffer (current-buffer))
+    (and lsp-bridge-source-mode lsp-bridge-source--reading)))
+
+(defun lsp-bridge-source-origin-directory (&optional buffer)
+  "Return BUFFER's original project directory, or nil.
+The directory may be a project subdirectory.  It survives closing the
+original buffer; a shared source buffer retains the latest jump's origin."
+  (with-current-buffer (or buffer (current-buffer))
+    (when (lsp-bridge-source-buffer-p)
+      (alist-get 'project lsp-bridge-source--origin))))
 (defconst lsp-bridge-source--worker
   (expand-file-name "core/source/worker.py" (file-name-directory (or load-file-name buffer-file-name))))
 
@@ -190,7 +209,8 @@ Example: ((\"compiler\" . \"ghc-9.12.2\") (\"unit\" . \"base-4.21.0.0-958c\")
                               (project . ,(alist-get 'project request))
                               (config . ,(alist-get 'config request))
                               (documentation . ,url)))
-                (lsp-bridge-source-mode 1))))
+                (lsp-bridge-source-mode 1)
+                (run-hooks 'lsp-bridge-source-context-update-hook))))
           (let ((target (list :line (alist-get 'line result) :character (alist-get 'character result))))
             (if peek
                 (progn
