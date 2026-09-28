@@ -161,6 +161,13 @@ installation is unsupported.
 
 ## Editor integration
 
+Managed external source buffers keep their originating `project.el` project
+by default.  Set `lsp-bridge-source-preserve-project` to nil to disable this
+association; Customize also updates buffers that are already open.  Explicit
+project switching and queries for other directories retain normal behavior.
+This does not change file paths, `default-directory`, or project file lists.
+Disabling source mode removes the buffer-local project association.
+
 `lsp-bridge-source-buffer-p` identifies managed read-only source buffers.
 `lsp-bridge-source-origin-directory` returns their originating project directory
 (possibly a subdirectory), without requiring the original buffer to stay open.
@@ -169,7 +176,7 @@ most recent navigation's origin.
 
 `lsp-bridge-source-context-update-hook` runs in the target buffer after each
 context assignment, including reuse and source-to-source navigation.  Personal
-project, title and tab integrations can use these APIs without inspecting
+title and tab integrations can use these APIs without inspecting
 internal state or changing `buffer-file-name` or `default-directory`.
 Use `lsp-bridge-source-mode-hook` to clean up when the mode is disabled.
 Already-open editable files are not converted to managed source buffers.

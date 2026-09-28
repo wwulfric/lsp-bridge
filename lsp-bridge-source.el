@@ -4,6 +4,7 @@
 (require 'browse-url)
 (require 'url-util)
 (require 'xml)
+(require 'project)
 
 (defvar lsp-bridge-jump-to-def-in-other-window)
 (defvar lsp-bridge-enable-predicates)
@@ -21,6 +22,21 @@
 (defcustom lsp-bridge-source-enable nil
   "Enable local source providers after definition lookup fails."
   :type 'boolean :group 'lsp-bridge-source)
+(defcustom lsp-bridge-source-preserve-project t
+  "Associate managed external source buffers with their originating project.
+Only queries for the source buffer's directory are redirected.  Explicit
+project switching and queries for other directories retain normal behavior.
+File paths and `default-directory' are never changed.
+Customize updates existing source buffers; after using `setq', toggle
+`lsp-bridge-source-mode' or navigate again to refresh the association."
+  :type 'boolean :group 'lsp-bridge-source
+  :set (lambda (symbol value)
+         (set-default symbol value)
+         (when (fboundp 'lsp-bridge-source--refresh-project)
+           (dolist (buffer (buffer-list))
+             (with-current-buffer buffer
+               (when (lsp-bridge-source-buffer-p)
+                 (lsp-bridge-source--refresh-project)))))))
 (defcustom lsp-bridge-source-python-command nil
   "Local Python 3.9+ for helpers, or nil to reuse the bridge interpreter.
 For uv/pipx/launcher wrappers, nil uses an installed python3/python directly
@@ -69,6 +85,8 @@ Example: ((\"compiler\" . \"ghc-9.12.2\") (\"unit\" . \"base-4.21.0.0-958c\")
 (defvar-local lsp-bridge-source--context nil)
 (defvar-local lsp-bridge-source--documentation nil)
 (defvar-local lsp-bridge-source--reading nil)
+(defvar-local lsp-bridge-source--project nil
+  "Originating project for this managed source buffer.")
 
 (defvar lsp-bridge-source-context-update-hook nil
   "Hook run in a managed source buffer after its origin is updated.
@@ -88,6 +106,34 @@ original buffer; a shared source buffer retains the latest jump's origin."
   (with-current-buffer (or buffer (current-buffer))
     (when (lsp-bridge-source-buffer-p)
       (alist-get 'project lsp-bridge-source--origin))))
+
+(defun lsp-bridge-source--find-project (directory)
+  "Return the originating project for the source buffer's DIRECTORY."
+  (when (and lsp-bridge-source-preserve-project
+             lsp-bridge-source--project
+             (not project-current-directory-override)
+             (lsp-bridge-source-buffer-p)
+             (equal (expand-file-name directory)
+                    (expand-file-name default-directory)))
+    lsp-bridge-source--project))
+
+(defun lsp-bridge-source--refresh-project ()
+  "Refresh the source buffer's project association, or remove it on disable."
+  ;; Remove our finder before querying the origin to avoid self-recursion.
+  (remove-hook 'project-find-functions #'lsp-bridge-source--find-project t)
+  (setq lsp-bridge-source--project nil)
+  (when lsp-bridge-source-preserve-project
+    (when-let* ((directory (lsp-bridge-source-origin-directory))
+                ((not (file-remote-p directory)))
+                ((file-directory-p directory)))
+      (setq lsp-bridge-source--project
+            (condition-case nil (project-current nil directory) (error nil)))
+      (when lsp-bridge-source--project
+        (add-hook 'project-find-functions #'lsp-bridge-source--find-project nil t)))))
+
+(add-hook 'lsp-bridge-source-mode-hook #'lsp-bridge-source--refresh-project)
+(add-hook 'lsp-bridge-source-context-update-hook #'lsp-bridge-source--refresh-project)
+
 (defconst lsp-bridge-source--worker
   (expand-file-name "core/source/worker.py" (file-name-directory (or load-file-name buffer-file-name))))
 
