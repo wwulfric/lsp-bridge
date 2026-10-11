@@ -789,6 +789,16 @@ class LspServer:
             except:
                 pass
 
+    def handle_show_message(self, message):
+        # Servers explain fatal setup problems here. HLS's wrapper, for
+        # example, reports why it couldn't start the real server only in a
+        # window/showMessageRequest, then fails every request with
+        # "No handler for: ...". Surface errors and warnings (type 1 and 2).
+        if message.get("method") in ["window/showMessage", "window/showMessageRequest"]:
+            params = message.get("params", {})
+            if params.get("type", 4) <= 2:
+                message_emacs("{} ({}): {}".format(self.project_name, self.server_info["name"], params.get("message", "")))
+
     def set_attribute_from_message(self, message, attribute_name, key_list):
         value = get_nested_value(message, key_list)
         if value is not None:
@@ -963,9 +973,11 @@ class LspServer:
             return
         self.handle_diagnostics_message(message)
         self.handle_log_message(message)
+        self.handle_show_message(message)
         self.handle_id_message(message)
         self.handle_work_done_progress_message(message)
         self.handle_register_capability_message(message)
+        self.handle_unanswered_request_message(message)
 
         logger.debug(json.dumps(message, indent=3))
 
