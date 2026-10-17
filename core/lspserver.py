@@ -291,6 +291,11 @@ class LspServer:
         self.semantic_tokens_provider = False
         self.diagnostic_provider = False  # pull based diagnostic
 
+        # The provider flags above stay False until the initialize response
+        # fills them in. Requests that check them wait here meanwhile.
+        self.capability_lock = threading.Lock()
+        self.awaiting_capabilities = []
+
         # It's confused about LSP server's textDocumentSync capability.
         # Python LSP server only have `willSave` field
         # Rust LSP server only have `save` field
@@ -848,7 +853,23 @@ class LspServer:
 
         self.sender.send_notification("workspace/didChangeConfiguration", self.get_server_workspace_change_configuration(), init=True)
 
-        self.sender.initialized.set()
+        with self.capability_lock:
+            self.sender.initialized.set()
+            callbacks, self.awaiting_capabilities = self.awaiting_capabilities, []
+
+        for callback in callbacks:
+            try:
+                callback()
+            except:
+                logger.error(traceback.format_exc())
+
+    def run_when_initialized(self, callback):
+        """Run CALLBACK now, or once the server's capabilities are known."""
+        with self.capability_lock:
+            if not self.sender.initialized.is_set():
+                self.awaiting_capabilities.append(callback)
+                return
+        callback()
 
     def handle_workspace_message(self, message):
         if message["method"] == "workspace/configuration":

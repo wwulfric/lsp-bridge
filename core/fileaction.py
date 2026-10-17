@@ -186,6 +186,14 @@ class FileAction:
             getattr(self, method)(*args, **kwargs)
 
     def send_request(self, method_server, method, handler, *args, **kwargs):
+        if hasattr(handler, "provider") and not method_server.sender.initialized.is_set():
+            # Provider flags read False until the initialize response arrives.
+            # Check again then instead of silently dropping the request, e.g.
+            # a workspace symbol search typed while the server starts.
+            method_server.run_when_initialized(
+                lambda: self.send_request(method_server, method, handler, *args, **kwargs))
+            return
+
         if hasattr(handler, "provider"):
             method_provider = getattr(method_server, getattr(handler, "provider"), None)
             if method_provider is not None:
