@@ -75,7 +75,7 @@
            (lsp-bridge-source--resolved lsp-bridge-source--context nil
                                        `((result (path . ,file) (line . 1) (character . 0))))
            (set-buffer (window-buffer (selected-window)))
-           (should (equal (buffer-file-name) file))
+           (should (file-equal-p (buffer-file-name) file))
            (should buffer-read-only)
            (should-not lsp-bridge-mode)
            (should (= (line-number-at-pos) 2))
@@ -124,7 +124,7 @@
            (should-not (eq window (selected-window)))
            (should (eq (window-buffer window) origin))
            (set-buffer (window-buffer (selected-window)))
-           (should (equal buffer-file-name file))
+           (should (file-equal-p buffer-file-name file))
            (lsp-bridge-find-def-return)
            (should (eq (current-buffer) origin))))
       (when-let* ((buffer (find-buffer-visiting file))) (kill-buffer buffer))
