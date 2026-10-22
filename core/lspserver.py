@@ -684,6 +684,30 @@ class LspServer:
 
         return settings
 
+    @staticmethod
+    def get_configuration_section(settings, section):
+        """Return the settings of SECTION, a dotted path such as "java.format".
+
+        Settings may nest the path ({"java": {"format": ...}}) or spell it as
+        flat keys ({"java.format.enabled": ...}), as VS Code style servers
+        like the IntelliJ language server read them."""
+        if not section:
+            return settings
+        if section in settings:
+            return settings[section]
+
+        value = settings
+        for key in section.split("."):
+            if not isinstance(value, dict) or key not in value:
+                break
+            value = value[key]
+        else:
+            return value
+
+        prefix = section + "."
+        flat = {key[len(prefix):]: value for key, value in settings.items() if key.startswith(prefix)}
+        return flat if flat else {}
+
     def handle_workspace_configuration_request(self, name, request_id, params):
         settings = self.server_info.get("settings", {})
 
@@ -699,7 +723,7 @@ class LspServer:
         server_name = self.server_info["name"]
         for p in params["items"]:
             section = p.get("section", server_name)
-            session_settings = settings.get(section, {})
+            session_settings = self.get_configuration_section(settings, section)
 
             if server_name == "vscode-eslint-language-server":
                 session_settings = settings
@@ -877,6 +901,16 @@ class LspServer:
         elif message["method"] == "workspace/applyEdit":
             eval_in_emacs("lsp-bridge-workspace-apply-edit", message["params"]["edit"])
             self.sender.send_response(message["id"], { "applied": True })
+        elif message["method"] == "window/showDocument":
+            # Servers place the caret this way after an edit they made
+            # themselves, and open sign-in pages in the browser.
+            params = message["params"]
+            uri = params["uri"]
+            external = params.get("external", False)
+            if not external and uri.startswith("file://"):
+                uri = uri_to_path(uri)
+            eval_in_emacs("lsp-bridge-window-show-document", uri, external, params.get("selection"))
+            self.sender.send_response(message["id"], { "success": True })
 
     def handle_id_message(self, message):
         if "id" in message:
@@ -965,9 +999,31 @@ class LspServer:
             # request (definition, references, etc.) hangs forever.
             self.sender.send_response(message["id"], None)
 
+    def handle_emacs_handler_message(self, message):
+        """Pass the server's own messages to the Emacs functions its config names.
+
+        "emacsHandlers" in the server's JSON maps a method to an Emacs
+        function, called with the message's params.  For a request, the
+        function's result is the response; Emacs may ask the user meanwhile,
+        which the server waits for anyway."""
+        handler = self.server_info.get("emacsHandlers", {}).get(message.get("method"))
+        if handler is None:
+            return
+        params = json.dumps(message.get("params"))
+        if "id" in message:
+            try:
+                result = json.loads(get_emacs_func_result("call-server-handler", handler, params) or "null")
+            except Exception:
+                logger.error(traceback.format_exc())
+                result = None
+            self.sender.send_response(message["id"], result)
+        else:
+            eval_in_emacs("lsp-bridge-call-server-handler", handler, params)
+
     ANSWERED_SERVER_REQUEST_METHODS = [
         "workspace/configuration",
         "workspace/applyEdit",
+        "window/showDocument",
         "window/workDoneProgress/create",
         "client/registerCapability",
         "client/unregisterCapability",
@@ -979,7 +1035,8 @@ class LspServer:
         # legal response for the requests we can't act on (e.g.
         # window/showMessageRequest means "user dismissed the prompt").
         if "id" in message and "method" in message and \
-           message["method"] not in self.ANSWERED_SERVER_REQUEST_METHODS:
+           message["method"] not in self.ANSWERED_SERVER_REQUEST_METHODS and \
+           message["method"] not in self.server_info.get("emacsHandlers", {}):
             log_time("Send null response to unhandled server request {} ({})".format(
                 message["method"], message["id"]))
             self.sender.send_response(message["id"], None)
@@ -995,6 +1052,7 @@ class LspServer:
         self.handle_diagnostics_message(message)
         self.handle_log_message(message)
         self.handle_show_message(message)
+        self.handle_emacs_handler_message(message)
         self.handle_id_message(message)
         self.handle_work_done_progress_message(message)
         self.handle_register_capability_message(message)

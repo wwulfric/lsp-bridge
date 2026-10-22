@@ -165,6 +165,10 @@ class Completion(Handler):
             # Some LSP server, such as Wen, need assign textEdit/newText to displayLabel.
             display_new_text = self.get_display_new_text()
 
+            # Items whose command lsp-bridge runs after inserting them.
+            command_patterns = [re.compile(pattern) for pattern in
+                                self.method_server.server_info.get("completionItemCommands", [])]
+
             for item in response["items"] if "items" in response else response:
                 kind = KIND_MAP[item.get("kind", 0)].lower()
                 label = item["label"]
@@ -229,6 +233,10 @@ class Completion(Handler):
 
                 if self.file_action.enable_auto_import:
                     candidate["additionalTextEdits"] = item.get("additionalTextEdits", [])
+
+                command = item.get("command")
+                if command is not None and any(p.search(command.get("command", "")) for p in command_patterns):
+                    candidate["command"] = command
 
                 completion_candidates.append(candidate)
 

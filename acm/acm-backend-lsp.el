@@ -159,6 +159,12 @@ Default is nil."
 
 
 (defvar acm-backend-lsp-fetch-completion-item-func nil)
+
+(defvar acm-backend-lsp-execute-command-func nil
+  "Function that asks SERVER, a server name, to execute an LSP COMMAND.
+Called with SERVER and COMMAND after inserting a candidate whose item
+carries a command.")
+
 (defvar-local acm-backend-lsp-fetch-completion-item-ticker nil)
 
 (defvar-local acm-backend-lsp-block-kind-list nil
@@ -225,7 +231,15 @@ Below is available types:
          (insert-text-format (plist-get candidate-info :insertTextFormat))
          (text-edit (plist-get candidate-info :textEdit))
          (new-text (plist-get text-edit :newText))
+         ;; An InsertReplaceEdit has no :range; replace like VS Code.
+         (text-edit-range (and text-edit
+                               (or (plist-get text-edit :range)
+                                   (plist-get text-edit :replace))))
          (additional-text-edits (plist-get candidate-info :additionalTextEdits))
+         (command (plist-get candidate-info :command))
+         ;; An empty edit with a command defers the insertion to the
+         ;; server: the command brings the text, imports and caret.
+         (command-inserts (and command text-edit (equal new-text "")))
          (snippet-fn (and (or (eql insert-text-format 2)
                               (string= (plist-get candidate-info :icon) "snippet"))
                           (acm-backend-lsp-snippet-expansion-fn)))
@@ -236,10 +250,10 @@ Below is available types:
     ;; Try to adjust delete-bound if `text-edit' is not nil.
     (when text-edit
       ;; Use smaller one between `bound-start' and `range-start' used as the starting point of delete.
-      (setq delete-start-pos (min (acm-backend-lsp-position-to-point (plist-get (plist-get text-edit :range) :start)) bound-start))
+      (setq delete-start-pos (min (acm-backend-lsp-position-to-point (plist-get text-edit-range :start)) bound-start))
 
       ;; Use bigger one between `point' and `range-end' used as the end point of delete.
-      (let* ((range-end (acm-backend-lsp-position-to-point (plist-get (plist-get text-edit :range) :end)))
+      (let* ((range-end (acm-backend-lsp-position-to-point (plist-get text-edit-range :end)))
              (completion-start-pos (acm-backend-lsp-position-to-point acm-backend-lsp-completion-position)))
         (when (> range-end completion-start-pos)
           (setq delete-end-pos (+ (point) (- range-end completion-start-pos))))))
@@ -259,14 +273,21 @@ Below is available types:
                    (not (string-prefix-p char-before-input insert-text)))
           (setq delete-start-pos (1+ delete-start-pos)))))
 
-    (if preview
-        ;; for candidate preview, we ignore `additional-text-edits' and `snippet'
-        (if snippet-fn
-            ;; for snippet, we only preview label
-            (acm-preview-create-overlay delete-start-pos delete-end-pos label)
-          (acm-preview-create-overlay delete-start-pos delete-end-pos
-                                      (or new-text insert-text label)))
+    (cond
+     ((and preview command-inserts)
+      (acm-preview-create-overlay delete-start-pos delete-end-pos label))
+     (command-inserts
+      (funcall acm-backend-lsp-execute-command-func
+               (plist-get candidate-info :server) command))
+     (preview
+      ;; for candidate preview, we ignore `additional-text-edits' and `snippet'
+      (if snippet-fn
+          ;; for snippet, we only preview label
+          (acm-preview-create-overlay delete-start-pos delete-end-pos label)
+        (acm-preview-create-overlay delete-start-pos delete-end-pos
+                                    (or new-text insert-text label))))
 
+     (t
       ;; Delete region.
       (delete-region delete-start-pos delete-end-pos)
       ;; Insert candidate or expand snippet.
@@ -282,7 +303,10 @@ Below is available types:
       ;; Do `additional-text-edits' if return auto-imprt information.
       (when (and acm-backend-lsp-enable-auto-import
                  (cl-plusp (length additional-text-edits)))
-        (acm-backend-lsp-apply-text-edits additional-text-edits)))))
+        (acm-backend-lsp-apply-text-edits additional-text-edits))
+      (when command
+        (funcall acm-backend-lsp-execute-command-func
+                 (plist-get candidate-info :server) command))))))
 
 (defun acm-backend-lsp-candidate-doc (candidate)
   ;; NOTE:

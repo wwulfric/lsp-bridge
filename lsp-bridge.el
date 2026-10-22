@@ -145,6 +145,32 @@ remote buffer whose `lsp-bridge-remote-file-host' IS a known key."
         (or resolved host)))))
 
 (setq acm-backend-lsp-fetch-completion-item-func 'lsp-bridge-fetch-completion-item-info)
+(setq acm-backend-lsp-execute-command-func 'lsp-bridge-execute-command)
+
+(defvar lsp-bridge--command-point nil
+  "Where the caret goes once the edit of a completion's command lands.
+A marker that advances over text inserted at it, with the time it was set.")
+
+(defun lsp-bridge-execute-command (server command)
+  "Ask SERVER, a server name, to execute the LSP COMMAND plist of a completion.
+The caret follows text the command's edit inserts at it, as in VS Code;
+servers that place it elsewhere say so with `window/showDocument'."
+  (setq lsp-bridge--command-point (cons (copy-marker (point) t) (float-time)))
+  (lsp-bridge-call-file-api "execute_command" server
+                            (plist-get command :command)
+                            (plist-get command :arguments)))
+
+(defun lsp-bridge--follow-command-point ()
+  "Move the caret to `lsp-bridge--command-point' if a command set it just now."
+  (pcase-let ((`(,marker . ,time) lsp-bridge--command-point))
+    (setq lsp-bridge--command-point nil)
+    (when (and (markerp marker) (marker-buffer marker)
+               (< (- (float-time) time) 3))
+      (with-current-buffer (marker-buffer marker)
+        (goto-char marker)
+        (when-let* ((window (get-buffer-window)))
+          (set-window-point window marker)))
+      (set-marker marker nil))))
 
 (defun lsp-bridge-fetch-completion-item-info (candidate)
   (let ((kind (plist-get candidate :icon))
@@ -419,11 +445,25 @@ LSP-Bridge will enable completion inside string literals."
                (lsp-bridge-epc-define-method mngr 'get-buffer-content 'lsp-bridge--get-buffer-content-func)
                (lsp-bridge-epc-define-method mngr 'get-current-line 'lsp-bridge--get-current-line-func)
                (lsp-bridge-epc-define-method mngr 'get-ssh-password 'lsp-bridge--get-ssh-password-func)
+               (lsp-bridge-epc-define-method mngr 'call-server-handler 'lsp-bridge-call-server-handler)
                ))))
     (if lsp-bridge-server
         (setq lsp-bridge-server-port (process-contact lsp-bridge-server :service))
       (error "[LSP-Bridge] lsp-bridge-server failed to start")))
   lsp-bridge-server)
+
+(defun lsp-bridge-call-server-handler (function params)
+  "Call FUNCTION, a name, with PARAMS, a server message's params as JSON.
+Servers whose config maps their own methods to functions in
+\"emacsHandlers\" reach them this way.  Returns the result as JSON, the
+response to a request."
+  (let ((result (funcall (intern function)
+                         (json-parse-string params :object-type 'plist :array-type 'list
+                                            :null-object nil :false-object :json-false))))
+    ;; A notification's handler may return anything.
+    (condition-case nil
+        (json-serialize result :null-object nil :false-object :json-false)
+      (wrong-type-argument "null"))))
 
 (defun lsp-bridge--eval-in-emacs-func (sexp-string)
   (eval (read sexp-string))
@@ -2459,6 +2499,22 @@ Then we need call `lsp-bridge--set-mark-ring-in-new-buffer' in new buffer after 
 
         (lsp-bridge-define--jump-flash position)))))
 
+(defun lsp-bridge-window-show-document (uri external selection)
+  "Show URI, a file name unless EXTERNAL, as the server asks.
+With SELECTION, an LSP range, put the caret there.  Servers place the
+caret this way after an edit of their own, such as a completion."
+  (cond
+   (external (browse-url uri))
+   ((not (file-exists-p uri)))
+   (t
+    (let ((buffer (find-file-noselect uri)))
+      (unless (eq buffer (window-buffer))
+        (pop-to-buffer-same-window buffer))
+      (with-current-buffer buffer
+        (when selection
+          (goto-char (acm-backend-lsp-position-to-point (plist-get selection :start)))
+          (set-window-point (get-buffer-window buffer) (point))))))))
+
 (defun lsp-bridge-define--jump-flash (position)
   ;; We need call `display' before `goto-char',
   ;; otherwise Emacs won't jump to target line if file has opened.
@@ -2904,6 +2960,8 @@ SymbolKind (defined in the LSP)."
                (format "%s" (nth (* changes-index 2) changes))
                (nth (+ (* changes-index 2) 1) changes) temp-buffer))))))
 
+  (unless temp-buffer
+    (lsp-bridge--follow-command-point))
   (setq-local lsp-bridge-prohibit-completion t))
 
 (defun lsp-bridge-completion-item--update (info filehost)
