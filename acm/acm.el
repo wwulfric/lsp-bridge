@@ -411,12 +411,16 @@ So we use `minor-mode-overriding-map-alist' to override key, make sure all keys 
                          (length keyword))))
         (cons (- (cdr bound) offset) (cdr bound)))))))
 
+(defun acm-get-input-prefix-bound-at-point ()
+  "Get the bound of user input prefix, or nil."
+  (let ((acm-input-bound-style (if (acm-in-roam-bracket-p)
+                                   "org-roam"
+                                 "ascii")))
+    (acm-get-input-prefix-bound)))
+
 (defun acm-get-input-prefix ()
   "Get user input prefix."
-  (let* ((acm-input-bound-style (if (acm-in-roam-bracket-p)
-                                    "org-roam"
-                                  "ascii"))
-         (bound (acm-get-input-prefix-bound)))
+  (let ((bound (acm-get-input-prefix-bound-at-point)))
     (if bound
         (buffer-substring-no-properties (car bound) (cdr bound))
       "")))
@@ -480,8 +484,11 @@ Only calculate template candidate when type last character."
 
 (defun acm-update-candidates ()
   (let* ((keyword (acm-get-input-prefix))
+         ;; The prefix may continue after point, so go to its start
+         ;; rather than back by its length, which can pass `point-min'.
          (char-before-keyword (save-excursion
-                                (backward-char (length keyword))
+                                (goto-char (or (car (acm-get-input-prefix-bound-at-point))
+                                               (point)))
                                 (acm-char-before)))
          (candidates (list))
          (mode-candidates-min-index 2)
