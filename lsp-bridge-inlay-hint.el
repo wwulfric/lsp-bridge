@@ -99,6 +99,9 @@
 (defvar-local lsp-bridge-inlay-hint-cache nil
   "We use `lsp-bridge-inlay-hint-cache' avoid screen flicker if two respond result is same.")
 (defvar-local lsp-bridge-inlay-hint-overlays '())
+(defvar-local lsp-bridge-inlay-hint-cache-time nil)
+(defvar-local lsp-bridge-inlay-hint--pending nil
+  "Timer that renders hints which came too soon after the last ones.")
 
 (defun lsp-bridge-inlay-hint-monitor-window-scroll ()
   (when lsp-bridge-enable-inlay-hint
@@ -147,6 +150,15 @@
             ;; Otherwise label is string, just return itself.
             label-info)))
 
+(defun lsp-bridge-inlay-hint--face-text (text)
+  "Return TEXT in `lsp-bridge-inlay-hint-face', but for blanks at its ends.
+The padding then stays clear when the face has a background."
+  (let ((start (or (string-match-p "[^ \t]" text) (length text)))
+        (end (string-match-p "[ \t]*\\'" text)))
+    (when (< start end)
+      (add-face-text-property start end 'lsp-bridge-inlay-hint-face t text))
+    text))
+
 (defvar lsp-bridge-inlay-hint-lock (make-mutex "lsp-bridge-inlay-hint-lock"))
 
 (defun lsp-bridge-inlay-hint--render (filepath filehost inlay-hints)
@@ -155,9 +167,19 @@
     (lsp-bridge--with-file-buffer
         filepath filehost
 
+        (when (timerp lsp-bridge-inlay-hint--pending)
+          (cancel-timer lsp-bridge-inlay-hint--pending)
+          (setq-local lsp-bridge-inlay-hint--pending nil))
+        (when (and (not (equal inlay-hints lsp-bridge-inlay-hint-cache))
+                   lsp-bridge-inlay-hint-cache
+                   (time-less-p (time-since lsp-bridge-inlay-hint-cache-time) 0.5))
+          ;; Hints within half a second of the last ones wait for the rest of
+          ;; it, or the last reply to a burst of edits would never be shown.
+          (setq-local lsp-bridge-inlay-hint--pending
+                      (run-at-time (- 0.5 (float-time (time-since lsp-bridge-inlay-hint-cache-time)))
+                                   nil #'lsp-bridge-inlay-hint--render filepath filehost inlay-hints)))
         (unless (or (equal inlay-hints lsp-bridge-inlay-hint-cache)
-                    (and lsp-bridge-inlay-hint-cache
-                         (time-less-p (time-since lsp-bridge-inlay-hint-cache-time) 0.5)))
+                    lsp-bridge-inlay-hint--pending)
           ;; Hide previous overlays first.
           (lsp-bridge-inlay-hint-hide-overlays)
 
@@ -184,9 +206,10 @@
                          ;; start of the hint text instead of jumping past it when moving right.
                          ;; See https://github.com/emacs-lsp/lsp-mode/issues/3263
                          (hint-text-propertized
-                          (if hint-render-use-after-string-p
-                              (propertize hint-text 'face 'lsp-bridge-inlay-hint-face 'cursor 1)
-                            (propertize hint-text 'face 'lsp-bridge-inlay-hint-face)))
+                          (lsp-bridge-inlay-hint--face-text
+                           (if hint-render-use-after-string-p
+                               (propertize hint-text 'cursor 1)
+                             hint-text)))
                          (overlay (if hint-render-use-after-string-p
                                       (make-overlay (point) (1+ (point)) nil t)
                                     (make-overlay (1- (point)) (point) nil nil nil))))
