@@ -310,6 +310,7 @@ lsp-bridge 针对许多语言都提供 2 个以上的语言服务器支持， �
 - `lsp-bridge-code-action-enable-popup-menu`: 启用 code action 菜单， 默认打开
 - `lsp-bridge-diagnostic-fetch-idle`： 诊断延迟， 默认是停止敲键盘后 0.5 秒开始拉取诊断信息
 - `lsp-bridge-signature-show-function`: 用于显示签名信息的函数, 默认是在 minibuffer 显示， 设置成 `lsp-bridge-signature-show-with-frame` 后可以用 frame 来显示函数的签名信息
+- `lsp-bridge-signature-help-function`: 接收完整签名的函数，每个签名包括标签、各参数在标签中的位置和当前参数，用来自己绘制签名提示；设置后不再使用 `lsp-bridge-signature-show-function`。默认为 nil
 - `lsp-bridge-signature-show-with-frame-position`: 当使用 `lsp-bridge-signature-show-with-frame` 来显示签名信息时， 这个选项定义弹出签名信息的位置， 默认是 `"bottom-right"`, 你还可以选择 `"top-left"`, `"top-right"`, `"bottom-left"`, `"point"`
 - `lsp-bridge-completion-popup-predicates`: 补全菜单显示的检查函数， 这个选项包括的所有函数都检查过以后， 补全菜单才能显示
 - `lsp-bridge-completion-stop-commands`: 这些命令执行以后， 不再弹出补全菜单

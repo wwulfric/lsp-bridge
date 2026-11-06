@@ -310,6 +310,7 @@ lsp-bridge provides support for more than two language servers for many language
 - `lsp-bridge-code-action-enable-popup-menu`: enable code action popup menu, enable by default
 - `lsp-bridge-diagnostic-fetch-idle`: diagnostic delay, start pulling diagnostic information 0.5 second after stopping typing
 - `lsp-bridge-signature-show-function`: The function used for displaying signature info, default show message in minibuffer, set `lsp-bridge-signature-show-with-frame` to show signature info in frame
+- `lsp-bridge-signature-help-function`: A function that gets every signature in full, each as its label, where its parameters lie in the label and its active parameter, to draw signature help itself; when set, `lsp-bridge-signature-show-function` is not used. Default is nil
 - `lsp-bridge-signature-show-with-frame-position`: When using `lsp-bridge-signature-show-with-frame` to display signature information, this option defines the position of the pop-up signature information, the default is `"bottom-right"`, you can also choose `"top-left"`, `"top-right"`, `"bottom-left"`, `"point"`
 - `lsp-bridge-completion-popup-predicates`: the predicate function for completion menu, completion menu popup after all the functions pass
 - `lsp-bridge-completion-stop-commands`: completion menu will not popup if these commands are executed
