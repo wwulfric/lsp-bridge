@@ -17,7 +17,7 @@ def test_entrypoint():
         os.environ["TMP"] = tmppath
         os.environ["TEMP"] = tmppath
 
-    print('Installing dependencies...')
+    print('Preparing test environment...')
     setup_eval = """
     (progn
         (set-face-background 'default "#000000")
@@ -25,7 +25,6 @@ def test_entrypoint():
         (require 'yasnippet)
         (require 'lsp-bridge)
         (require 'lsp-bridge-jdtls)       ;; provide Java third-party library jump and -data directory support, optional
-        (require 'tempel)
         (yas-global-mode 1)
         (global-lsp-bridge-mode)
     )"""

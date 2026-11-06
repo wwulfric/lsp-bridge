@@ -1,5 +1,5 @@
 from core.handler import Handler
-from core.utils import *
+from core.utils import eval_in_emacs
 
 
 def parameter_ranges(signature: dict) -> list:
@@ -38,19 +38,22 @@ class SignatureHelp(Handler):
         if response is not None:
             if len(response.get("signatures") or []) > 0:
                 active_signature = response.get("activeSignature") or 0
-                if active_signature >= len(response["signatures"]):
+                if not 0 <= active_signature < len(response["signatures"]):
                     active_signature = 0
-                parameters = response["signatures"][active_signature].get("parameters") or []
+                selected = response["signatures"][active_signature]
+                parameters = selected.get("parameters") or []
 
                 arguments = []
-                active_argument_index = response.get("activeParameter", 0)
+                active_argument_index = selected.get("activeParameter", response.get("activeParameter"))
+                if active_argument_index is None:
+                    active_argument_index = 0
                 for index, parameter in enumerate(parameters):
                     label = parameter["label"]
                     if isinstance(label, str): # most lsp server return string
                         argument = label if index == active_argument_index else label.split(":")[0]
                         arguments.append(argument)
                     elif isinstance(label, list) and len(label) == 2: # ccls return list
-                        signatures_label = response["signatures"][0]["label"]
+                        signatures_label = selected["label"]
                         arguments.append(signatures_label[label[0]:label[1]])
 
                 # Every signature in full, for a popup that shows them all:
@@ -62,5 +65,5 @@ class SignatureHelp(Handler):
                                        parameter_ranges(signature),
                                        -1 if active_parameter is None else active_parameter])
 
-                eval_in_emacs("lsp-bridge-signature-help--update", arguments, response.get("activeParameter", 0),
+                eval_in_emacs("lsp-bridge-signature-help--update", arguments, active_argument_index,
                               signatures, active_signature)

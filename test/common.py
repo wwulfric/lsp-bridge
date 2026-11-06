@@ -1,4 +1,5 @@
 import os
+import json
 import pprint
 import subprocess
 import sys
@@ -14,7 +15,7 @@ from core.utils import logger, epc_client
 
 lsp_bridge = None
 
-EMACS = 'emacs'
+EMACS = os.getenv('EMACS', 'emacs')
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -49,7 +50,6 @@ def run_batch(args, cwd=BASE_DIR):
         (quelpa '(compat :fetcher github :repo "emacs-compat/compat" :commit "cccd41f549fa88031a32deb26253b462021d7e12"))
         (quelpa '(markdown-mode :fetcher github :repo "jrblevin/markdown-mode" :commit "d51c469133d220823cc6ab50ff8e8743ed6e42fb"))
         (quelpa '(yasnippet :fetcher github :repo "joaotavora/yasnippet" :commit "dd570a6b22364212fff9769cbf4376bdbd7a63c5"))
-        (quelpa '(tempel :fetcher github :repo "minad/tempel" :commit "aa0f6fab4013d4661c34f9352531ceac1f0973a8"))
         (package-initialize)
 
         ;; for Windows
@@ -59,8 +59,16 @@ def run_batch(args, cwd=BASE_DIR):
     )
     """
 
+    dependency_args = []
+    if dependency_root := os.getenv("LSP_BRIDGE_TEST_DEPS"):
+        # Reuse checked-out dependencies instead of installing packages.
+        for package in ("compat", "markdown-mode", "yasnippet", "posframe"):
+            dependency_args.extend(["-L", str(Path(dependency_root) / package)])
+        init_eval = "(prefer-coding-system 'utf-8-unix)"
+    init_eval = "(progn " + init_eval + " (setq lsp-bridge-python-command " + json.dumps(sys.executable) + "))"
+
     args = [
-        EMACS, "-Q", "--batch",
+        EMACS, "-Q", "--batch", *dependency_args,
         '--eval', init_eval,
         "-L", os.path.join(BASE_DIR, 'acm'),
         "-L", str(BASE_DIR),
