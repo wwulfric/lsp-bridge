@@ -2626,7 +2626,22 @@ Default is `bottom-right', you can choose other value: `top-left', `top-right', 
                        ))
     (lsp-bridge-hide-signature-tooltip)))
 
-(defun lsp-bridge-signature-help--update (help-infos help-index)
+(defcustom lsp-bridge-signature-help-function nil
+  "Function to show signature help with every signature in full, or nil.
+It gets SIGNATURES, a list of (LABEL PARAMETER-RANGES ACTIVE-PARAMETER),
+where PARAMETER-RANGES are the (START END) of each parameter in LABEL and
+ACTIVE-PARAMETER is -1 when there is none, and ACTIVE-SIGNATURE, an index
+into them.  When nil, `lsp-bridge-signature-show-function' shows the
+active signature's parameters."
+  :type '(choice (const :tag "Show parameters" nil) function)
+  :group 'lsp-bridge)
+
+(defun lsp-bridge-signature-help--update (help-infos help-index &optional signatures active-signature)
+  (if (and lsp-bridge-signature-help-function signatures)
+      (funcall lsp-bridge-signature-help-function signatures (or active-signature 0))
+    (lsp-bridge-signature-help--show help-infos help-index)))
+
+(defun lsp-bridge-signature-help--show (help-infos help-index)
   (let ((index 0)
         (help ""))
     (dolist (help-info help-infos)

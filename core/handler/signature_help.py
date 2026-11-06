@@ -2,6 +2,28 @@ from core.handler import Handler
 from core.utils import *
 
 
+def parameter_ranges(signature: dict) -> list:
+    """Return where each parameter is in the signature's label, as [start, end]."""
+    label = signature.get("label", "")
+    ranges = []
+    # Past the function's name, which may contain a parameter's.
+    search_from = label.find("(") + 1
+    for parameter in signature.get("parameters") or []:
+        parameter_label = parameter.get("label")
+        if isinstance(parameter_label, list) and len(parameter_label) == 2:
+            start, end = parameter_label
+        elif isinstance(parameter_label, str):
+            start = label.find(parameter_label, search_from)
+            if start < 0:
+                continue
+            end = start + len(parameter_label)
+        else:
+            continue
+        ranges.append([start, end])
+        search_from = end
+    return ranges
+
+
 class SignatureHelp(Handler):
     name = "signature_help"
     method = "textDocument/signatureHelp"
@@ -14,9 +36,12 @@ class SignatureHelp(Handler):
 
     def process_response(self, response: dict) -> None:
         if response is not None:
-            if len(response["signatures"]) > 0 and "parameters" in response["signatures"][0]:
-                parameters = response["signatures"][response.get("activeSignature", 0)]["parameters"]
-                
+            if len(response.get("signatures") or []) > 0:
+                active_signature = response.get("activeSignature") or 0
+                if active_signature >= len(response["signatures"]):
+                    active_signature = 0
+                parameters = response["signatures"][active_signature].get("parameters") or []
+
                 arguments = []
                 active_argument_index = response.get("activeParameter", 0)
                 for index, parameter in enumerate(parameters):
@@ -27,5 +52,15 @@ class SignatureHelp(Handler):
                     elif isinstance(label, list) and len(label) == 2: # ccls return list
                         signatures_label = response["signatures"][0]["label"]
                         arguments.append(signatures_label[label[0]:label[1]])
-                        
-                eval_in_emacs("lsp-bridge-signature-help--update", arguments, response.get("activeParameter", 0))
+
+                # Every signature in full, for a popup that shows them all:
+                # (LABEL PARAMETER-RANGES ACTIVE-PARAMETER), -1 for none.
+                signatures = []
+                for signature in response["signatures"]:
+                    active_parameter = signature.get("activeParameter", response.get("activeParameter"))
+                    signatures.append([signature.get("label", ""),
+                                       parameter_ranges(signature),
+                                       -1 if active_parameter is None else active_parameter])
+
+                eval_in_emacs("lsp-bridge-signature-help--update", arguments, response.get("activeParameter", 0),
+                              signatures, active_signature)
