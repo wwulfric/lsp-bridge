@@ -1554,7 +1554,6 @@ If no sub-buffer is active, use the Org buffer for inline Babel lookup."
 
 (add-hook 'kill-emacs-hook #'lsp-bridge-kill-process)
 
-(defalias 'lsp-bridge-stop-process #'lsp-bridge-kill-process)
 
 (defun lsp-bridge--kill-python-process ()
   "Kill LSP-Bridge background python process."

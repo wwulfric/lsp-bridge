@@ -284,16 +284,9 @@ def get_emacs_func_result(method_name, *args):
 def get_command_result(command_string, cwd):
     import subprocess
 
-    major, minor = sys.version_info[:2]
-
-    if major >= 3 and minor >= 7:
-        process = subprocess.Popen(command_string, cwd=cwd, shell=True, text=True,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   encoding="utf-8", errors="replace")
-    else:
-        process = subprocess.Popen(command_string, cwd=cwd, shell=True, universal_newlines=True,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                   encoding="utf-8", errors="replace")
+    process = subprocess.Popen(command_string, cwd=cwd, shell=True, text=True,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               encoding="utf-8", errors="replace")
 
     ret = process.wait()
     return "".join((process.stdout if ret == 0 else process.stderr).readlines()).strip()
@@ -336,11 +329,6 @@ def _substring_match(string, like_name):
     return string.find(like_name) >= 0
 
 def string_match(string, like_name, match_mode="prefix", case_mode="ignore"):
-    # For compatibility reasons: match_mode can be prefixCaseSensitiv
-    if match_mode == "prefixCaseSensitive":
-        case_mode = "sensitive"
-        match_mode = "prefix"
-
     match case_mode:
         case "smart":
             if not any(c.isupper() for c in like_name):

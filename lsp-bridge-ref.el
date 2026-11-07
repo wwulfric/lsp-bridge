@@ -681,7 +681,6 @@ user more freedom to use rg with special arguments."
   (goto-char (point-min)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;; Interactive functions ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-(defalias 'lsp-bridge-ref-search-input-in-project 'lsp-bridge-ref-search-project)
 
 (defun lsp-bridge-ref-replace-all-matches ()
   (interactive)

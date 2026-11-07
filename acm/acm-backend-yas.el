@@ -105,12 +105,12 @@
   :group 'acm-backend-yas)
 
 (defcustom acm-backend-yas-show-trigger-keyword " (%s)"
-  "Format for displaying extra info about yas candidaets.
+  "Format for displaying extra info about yas candidates.
 If the value is nil, then format is \"filename\".
-If the value is t or string $str contains one %s, then format is
+If the value is a string containing one %s, then format is
 \"filename trigger\" or \"trigger filename\" which is controlled by
 `acm-backend-yas-match-by-trigger-keyword'."
-  :type '(choice (boolean :tag "Enable or not, t to use default value")
+  :type '(choice (const :tag "Hide extra info" nil)
                  (string :tag "Literal text with %s"))
   :group 'acm-backend-yas)
 
@@ -179,9 +179,7 @@ Default matching use snippet filename."
       (setq acm-backend-yas--cache (yas--all-templates (yas--get-snippet-tables)))
       (setq acm-backend-yas--cache-expire-p nil)
       (setq acm-backend-yas--cache-modes (yas--modes-to-activate)))
-    (let* ((show-key acm-backend-yas-show-trigger-keyword)
-           ;; WORKAROUND backward compatibility for boolean value
-           (form (concat "%s" (or (and (booleanp show-key) show-key " (%s)") show-key)))
+    (let* ((form (concat "%s" acm-backend-yas-show-trigger-keyword))
            (match-templates (acm-backend-yas--template-sort
                              keyword
                              (seq-filter (lambda (s)

@@ -253,10 +253,8 @@
          (y (+ (cdr pos) (* (or line-bias 0) (line-pixel-height))))
          (offset-y
           ;; We need move down to skip tab-line and header-line.
-          (if (version< emacs-version "27.0")
-              (window-header-line-height)
-            (+ (window-tab-line-height)
-               (window-header-line-height)))))
+          (+ (window-tab-line-height)
+             (window-header-line-height))))
     (cons (+ x window-left)
           (+ y window-top offset-y))))
 

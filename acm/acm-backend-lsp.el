@@ -112,20 +112,17 @@
   "The match mode to filter completion candidates.
 
 `prefix': filter candidates with input prefix, note such as C++, after `std::', candidate's prefix is not `::'. For input \"abc\", it will match \"^abc.*\"
-`prefixCaseSensitive': filter candidates with input prefix, and case sensitive
 `fuzzy': fitler candidates with fuzzy algorithm. For input \"abc\", it will match \".*a.*b.*c.*\".
 `substring': filter candidates which treated the input as a literal string that must occur in the candidate. For input \"abc\", it will match \".*abc.*\"
 
-lsp-bridge still will use `fuzzy' algorithm filter candidates if value is not `prefix' `prefixCaseSensitive' `substring' or `fuzzy'.
+Use `acm-backend-lsp-case-mode' to control case sensitivity.
 
 The lsp-bridge will continuously filter candidates on the Python side.
 If not filter and the value of `acm-backend-lsp-candidates-max-number' is far smaller than the number of candidates returned by the LSP server,
 it will cause the lsp-bridge to always send the previous batch of candidates which do not match the users input."
   :type '(choice (const :tag "Fuzzy Match" "fuzzy")
                  (const :tag "Prefix Match" "prefix")
-                 (const :tag "Prefix Match with Case Sensitive" "prefixCaseSensitive")
-                 (const :tag "Substring Match" "substring")
-                 (other :tag "For compatibility, you can use any string. It will fall back to fuzzy match" string))
+                 (const :tag "Substring Match" "substring"))
   :group 'acm-backend-lsp)
 
 (defcustom acm-backend-lsp-case-mode "ignore"
