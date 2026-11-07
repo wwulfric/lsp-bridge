@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
 SCRIPT_PATH=$(realpath "$0")
 SCRIPT_DIR_PATH=$(dirname "$SCRIPT_PATH")
-exec uv --directory="$SCRIPT_DIR_PATH" run python "$@"
+# CI checks that uv.lock matches pyproject.toml; launches never rewrite it.
+exec uv --directory="$SCRIPT_DIR_PATH" run --frozen python "$@"

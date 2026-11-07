@@ -30,8 +30,9 @@ lsp-bridge 的优势：
 ## 安装
 
 1. 安装 Emacs 28 及以上版本
-2. 安装 Python 依赖: `pip3 install epc orjson sexpdata six setuptools paramiko rapidfuzz watchdog packaging` (orjson 是可选的， orjson 基于 Rust， 提供更快的 JSON 解析性能)
+2. 使用 Python **3.12 或 3.13**。安装 Python 依赖: `pip3 install epc orjson sexpdata six setuptools paramiko rapidfuzz watchdog packaging` (orjson 是可选的， orjson 基于 Rust， 提供更快的 JSON 解析性能)
    - 如果你已经安装了 [uv](https://docs.astral.sh/uv)，可以使用仓库中提供的 `python-lsp-bridge` 包装脚本。请将其**创建符号链接**（不要复制）到你的 PATH 路径下的目录。lsp-bridge 会默认使用这个选项。
+   - 使用仓库锁定的依赖版本时，在仓库目录运行 `uv sync --locked --python 3.12`（也可选 `3.13`）。包装脚本直接使用 `uv.lock`，不会启动时重写它；CI 在这两个 Python 版本上校验并安装锁文件。
 3. 安装 Elisp 依赖: [markdown-mode](https://github.com/jrblevin/markdown-mode), [yasnippet](https://github.com/joaotavora/yasnippet)
 4. 用 `git clone` 下载此仓库， 并替换下面配置中的 load-path 路径
 5. 把下面代码加入到你的配置文件 ~/.emacs 中：

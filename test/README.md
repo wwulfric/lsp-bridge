@@ -28,3 +28,14 @@ sources. `EMACS` can select another Emacs executable.
 The old, entirely commented-out completion-acceptance and same-file jump
 experiments have been removed. Active Python completion and cross-file jump
 tests remain, alongside the newer offline regression suites.
+
+## Python compatibility and lockfile
+
+Python 3.12 and 3.13 are supported. Both CI workflows use that matrix and
+install from `uv.lock` with `uv sync --locked --python python`, so stale locks
+fail the job. No package versions were upgraded when extending the lock to 3.12.
+The launcher uses `uv run --frozen` to consume the committed lock without
+rewriting it. Use `uv lock --check` when editing dependency declarations.
+
+`lsp-bridge-server-config-features` advertises the integration contract to
+client adapters. Keep the Lisp and Python parts from the same checkout.

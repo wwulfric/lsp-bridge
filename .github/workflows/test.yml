@@ -7,6 +7,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest]
+        python: ["3.12", "3.13"]
         emacs_version:
           - "28.1"
 
@@ -28,44 +29,23 @@ jobs:
       - name: Install Python
         uses: actions/setup-python@v2
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python }}
           architecture: "x64"
 
-      - name: Install NodeJS
-        uses: actions/setup-node@v3
-        with:
-          node-version: "14"
-
-      - name: Setup Go
-        uses: actions/setup-go@v3
-        with:
-          go-version: '>=1.17.0'
-
-      - name: Install Dependencies (Linux)
+      - name: Install locked bridge dependencies and Python language servers
         run: |
-          # sudo apt-get install clangd-12
-          # sudo update-alternatives --install /usr/bin/clangd clangd /usr/bin/clangd-12 100
-          pip install epc six basedpyright sexpdata watchdog packaging
-          go install golang.org/x/tools/gopls@latest
-          curl https://raw.githubusercontent.com/eruizc-dev/jdtls-launcher/master/install.sh | bash
-        if: matrix.os == 'ubuntu-latest'
-
-      - name: Install Dependencies (Windows)
-        run: |
-          # choco install llvm
-          python -m pip install epc six basedpyright sexpdata watchdog packaging
-          go install golang.org/x/tools/gopls@latest
-        if: matrix.os == 'windows-latest'
+          python -m pip install uv==0.6.12 basedpyright ruff
+          uv sync --locked --python python
 
       - name: test
         run: |
           echo ${PATH}
-          python3 -m test.test
+          uv run --locked python -m test.test
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         if: ${{ failure() }}
         with:
-          name: test-log
+          name: test-log-${{ matrix.python }}
           path: test.log
           retention-days: 3

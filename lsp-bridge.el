@@ -147,6 +147,12 @@ remote buffer whose `lsp-bridge-remote-file-host' IS a known key."
 (setq acm-backend-lsp-fetch-completion-item-func 'lsp-bridge-fetch-completion-item-info)
 (setq acm-backend-lsp-execute-command-func 'lsp-bridge-execute-command)
 
+(defconst lsp-bridge-server-config-features
+  '(completion-item-commands emacs-handlers show-document insert-replace-edit)
+  "Server integration features supported by this checkout.
+Adapters may check these symbols before installing hooks.  Lisp and Python
+must come from the same checkout; this describes their combined contract.")
+
 (defvar lsp-bridge--command-point nil
   "Where the caret goes once the edit of a completion's command lands.
 A marker that advances over text inserted at it, with the time it was set.")
