@@ -9,7 +9,7 @@ LOAD_PATH = -L . -L acm -L $(DEPS)/markdown-mode -L $(DEPS)/yasnippet -L $(DEPS)
 test: test-python test-elisp
 
 test-python:
-	$(PYTHON) -m unittest test.test_source test.test_server_extensions test.test_org_babel test.test_signature_help test.test_langserver -v
+	$(PYTHON) -m unittest test.test_source test.test_server_extensions test.test_org_babel test.test_signature_help test.test_langserver test.test_workspace_watch_files -v
 
 test-elisp:
 	$(EMACS) -Q --batch --eval '(setq load-prefer-newer t)' $(LOAD_PATH) \
