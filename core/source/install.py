@@ -1,9 +1,10 @@
-"""Explicit GHC source acquisition. Only this module may access the network."""
+"""Acquire and verify source archives for GHC and Cabal dependencies."""
 import hashlib
 import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tarfile
 import tempfile
@@ -65,11 +66,11 @@ def lock(path):
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
 
-def download(url, destination, limit):
+def download(url, destination, limit, origin="https://downloads.haskell.org/"):
     digest, total = hashlib.sha256(), 0
     check_cancel()
     with urlopen(url, timeout=15) as response, destination.open('wb') as output:
-        if not response.url.startswith('https://downloads.haskell.org/'):
+        if not response.url.startswith(origin):
             raise ValueError('Unexpected download redirect')
         while True:
             check_cancel()
@@ -81,7 +82,7 @@ def download(url, destination, limit):
                 raise ValueError('Download size limit exceeded')
             digest.update(chunk)
             output.write(chunk)
-            progress('Downloading GHC sources: %d MiB' % (total // 1048576))
+            progress('Downloading sources: %d MiB' % (total // 1048576))
     return digest.hexdigest()
 
 
@@ -131,7 +132,56 @@ def extract(archive, destination):
                     if not chunk:
                         break
                     dst.write(chunk)
-            progress('Extracting verified GHC sources')
+            progress('Extracting verified sources')
+
+
+def dependency_source(cache, name, version, digest):
+    """Publish the Cabal plan's exact source tarball once across resolvers."""
+    if not (re.fullmatch(r'[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*', name)
+            and re.fullmatch(r'\d+(?:\.\d+)*', version)
+            and re.fullmatch(r'[a-f0-9]{64}', digest)):
+        raise ValueError('Invalid Cabal source package identity')
+    package = f'{name}-{version}'
+    base = cache / 'haskell/packages' / digest
+    base.mkdir(parents=True, exist_ok=True)
+    root = base / package
+    with lock(base / '.install.lock'):
+        if root.is_dir():
+            return root
+        with tempfile.TemporaryDirectory(dir=base) as staging:
+            stage = Path(staging)
+            archive = stage / 'source.tar.gz'
+            try:
+                repo_cache = Path(subprocess.check_output(
+                    ['cabal', 'path', '--ignore-project', '--remote-repo-cache'], text=True,
+                    stderr=subprocess.PIPE, timeout=20).strip())
+            except (OSError, subprocess.SubprocessError):
+                repo_cache = None
+            if repo_cache and repo_cache.is_absolute():
+                for local in repo_cache.glob(f'*/{name}/{version}/{package}.tar.gz'):
+                    shutil.copyfile(local, archive)
+                    with archive.open('rb') as stream:
+                        checksum = hashlib.sha256()
+                        for chunk in iter(lambda: stream.read(256 * 1024), b''):
+                            check_cancel()
+                            checksum.update(chunk)
+                    if checksum.hexdigest() == digest:
+                        break
+                else:
+                    archive.unlink(missing_ok=True)
+            if not archive.exists():
+                origin = 'https://hackage-content.haskell.org/'
+                url = f'{origin}package/{package}/{package}.tar.gz'
+                if download(url, archive, 256 * 1024**2, origin) != digest:
+                    raise ValueError('Package archive differs from Cabal plan: ' + package)
+            unpacked = stage / 'unpacked'
+            extract(archive, unpacked)
+            package_root = unpacked / package
+            if not (package_root / (name + '.cabal')).is_file():
+                raise ValueError('Missing package description in archive: ' + package)
+            check_cancel()
+            package_root.rename(root)
+    return root
 
 
 def valid_manifest(manifest, version):

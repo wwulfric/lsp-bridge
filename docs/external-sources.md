@@ -1,6 +1,6 @@
 # External source navigation
 
-This opt-in feature adds a **local-only Haskell import fallback and continuous source navigation** after an empty
+This opt-in feature adds a **Haskell import fallback and continuous source navigation** after an empty
 or missing-file definition response. Valid LSP files and the existing Java,
 Deno and C# virtual document resolvers retain their current paths and sessions.
 Type definitions, implementations and multiple-result selection are unchanged.
@@ -12,8 +12,16 @@ Type definitions, implementations and multiple-result selection are unchanged.
 Use Python 3.9 or newer for the isolated source helper. Override its executable
 with `lsp-bridge-source-python-command` if needed. For uv/pipx/launcher-based
 bridge configurations, the helper uses a directly installed Python to avoid
-implicit environment downloads. Normal navigation never
-starts a new download. Existing language-server download policies are unchanged.
+implicit environment downloads. When a module import has no installed Haddock page, jump and Peek use the
+repository package and SHA-256 in the Cabal plan. The provider checks Cabal's
+tarball cache first, then downloads the exact archive from Hackage if needed.
+After verification it caches the extracted package and opens the unique matching
+.hs module declaration. For function calls in project files, the resolver uses the local ghcide HIE
+index to identify the referenced package unit and defining module (including
+re-exports). The indexed source must match the current buffer. The provider
+opens the first top-level function equation in the verified package archive.
+A named import can also resolve a function defined in the imported module
+directly. Links inside dependency source still use Haddock. Existing language-server download policies are unchanged.
 
 ## Commands
 
@@ -46,7 +54,7 @@ package database**, and GHC must match the plan's compiler ID. Only exact unit
 IDs from the plan may supply documentation. Global/user databases, the existing
 project package database and Cabal's existing store are queried. Cabal's
 `path --store-dir` is used where supported, including the plan's compiler ABI.
-No package dependency is installed or copied.
+Acquiring source does not build or install the package.
 
 For Stack, Nix, custom cradles, or a non-PATH toolchain, set buffer/project-local
 values for these variables (for example in a trusted `.dir-locals.el`):
@@ -80,7 +88,7 @@ and the provider's own cache are indexed, never arbitrary disk locations.
 The resolver reads **unsaved buffer text**. It supports module names, aliases,
 qualified/postpositive-qualified imports and named imports across lines. It
 excludes comments, hiding-list items, operators, package-qualified imports,
-CPP-conditional files and body references in project buffers. Source links identify re-exported
+CPP-conditional imports. Project body references use the HIE index described above. Source links identify re-exported
 implementation modules. The exact HTML anchor/line, module declaration and
 source text must agree; no same-name symbol guessing or semantic index is used.
 Generated/preprocessed files whose line/text cannot be verified stay in HTML.

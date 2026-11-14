@@ -1,6 +1,8 @@
 """Offline provider, integrity and definition routing regression tests."""
+import hashlib
 import io
 import json
+import sqlite3
 import tarfile
 import tempfile
 import unittest
@@ -67,6 +69,7 @@ class Mapping(unittest.TestCase):
                                        'cache': str(self.root / 'cache')})
         self.provider = Haskell()
         def probe(context):
+            self.provider.repo_digests = getattr(self.provider, 'repo_digests', {})
             self.provider.version = '9.12.2'
             self.provider.units = {'base-unit': ('base','4.21'), 'internal-unit': ('ghc-internal','9.1202')}
             return {}
@@ -105,11 +108,54 @@ class Mapping(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'No exact'):
             self.provider.resolve(self.context)
 
+    def test_no_haddock_uses_exact_repository_source(self):
+        self.document.unlink()
+        self.context.point = self.context.text.index('Traversable')
+        self.provider.repo_digests = {'base-unit': 'a' * 64}
+        module = self.src / 'Data/Traversable.hs'
+        module.parent.mkdir()
+        module.write_text('-- header\nmodule Data.Traversable where\n')
+        with patch.object(install, 'dependency_source', return_value=self.src) as acquire:
+            result = self.provider.resolve(self.context)
+        acquire.assert_called_once_with(cache_root(self.context.config), 'base', '4.21', 'a' * 64)
+        self.assertEqual((result.path, result.line), (str(module.resolve()), 1))
+
+    def test_indexed_call_resolves_defining_unit_and_equation(self):
+        project = self.root / 'Main.hs'
+        source = 'import Facade\nmain =\tFacade.choose 2\n'
+        project.write_text(source)
+        self.context.file = str(project)
+        self.context.text = source
+        self.context.point = source.index('.choose') + 2
+        index = self.root / 'ghcide'
+        index.mkdir()
+        hie = index / 'Main.hie'
+        hie.write_bytes(source.encode())
+        db = sqlite3.connect(index / 'project.hiedb')
+        with db:
+            db.execute('create table mods (hs_src, hieFile, hash, unit)')
+            db.execute('create table refs (hieFile, occ, sl, el, sc, ec, mod, unit)')
+            db.execute('insert into mods values (?, ?, ?, ?)',
+                       (str(project.resolve()), str(hie), hashlib.md5(hie.read_bytes()).hexdigest(), 'main'))
+            db.execute("insert into refs values (?, 'v:choose', 2, 2, 16, 22, 'Internal', 'internal-unit')",
+                       (str(hie),))
+        db.close()
+        module = self.src / 'Internal.hs'
+        module.write_text('module Internal where\nchoose :: Int -> Int\nchoose n\n  | n > 0 = n\nchoose _ = 0\n')
+        self.provider.repo_digests = {'internal-unit': 'a' * 64}
+        with patch.dict('os.environ', XDG_CACHE_HOME=str(self.root)), patch.object(
+                install, 'dependency_source', return_value=self.src) as acquire:
+            result = self.provider.resolve(self.context)
+            self.assertEqual((result.path, result.line), (str(module.resolve()), 2))
+            self.context.text += '-- edited\n'
+            self.assertIsNone(self.provider.resolve(self.context))
+            acquire.assert_called_once()
+
     def test_ambiguous_packages(self):
         self.provider.probe(self.context)
         self.provider.pkg_run = lambda *args: 'base-unit internal-unit' if args[0] == 'find-module' else str(self.docs)
         with self.assertRaisesRegex(ValueError, 'Ambiguous'):
-            self.provider.documents('Data.Traversable')
+            self.provider.module_units('Data.Traversable')
 
     def test_missing_anchor_and_online_link(self):
         self.assertIsNone(source_location(self.html, 'not-found'))
@@ -145,6 +191,24 @@ class Archive(unittest.TestCase):
                 item.size = 4
                 tar.addfile(item, io.BytesIO(b'test'))
         return path
+
+    def test_dependency_download_retry_and_reuse(self):
+        archive = self.archive('example-1.0/example.cabal').read_bytes()
+        digest = hashlib.sha256(archive).hexdigest()
+        def download(url, destination, limit, origin):
+            self.assertTrue(url.endswith('/example-1.0/example-1.0.tar.gz'))
+            destination.write_bytes(archive)
+            return digest
+        args = (self.root, 'example', '1.0', digest)
+        with patch.object(install.subprocess, 'check_output', return_value=str(self.root)):
+            with patch.object(install, 'download', return_value='0' * 64):
+                with self.assertRaisesRegex(ValueError, 'differs from Cabal plan'):
+                    install.dependency_source(*args)
+            with patch.object(install, 'download', side_effect=download) as fetch:
+                root = install.dependency_source(*args)
+                self.assertTrue((root / 'example.cabal').is_file())
+                self.assertEqual(install.dependency_source(*args), root)
+                fetch.assert_called_once()
 
     def test_paths_and_links(self):
         for name in ['../escape', '/absolute', 'C:/escape', 'a\\..\\b', 'aux.txt', 'x.']:

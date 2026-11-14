@@ -1,11 +1,14 @@
 """Conservative import -> exact installed Haddock -> verified .hs mapping."""
+import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
+import sqlite3
 import subprocess
 import sys
+from contextlib import closing
 from html.parser import HTMLParser
 from functools import lru_cache
 from dataclasses import replace
@@ -250,6 +253,83 @@ def package_paths(raw):
     return values
 
 
+def indexed_function(context):
+    """Read the renamed occurrence, including its defining module and package unit."""
+    start = context.text.rfind('\n', 0, context.point) + 1
+    line = context.text[start:].partition('\n')[0]
+    column = context.point - start
+    token = next((word for word in re.finditer(r"[\w']+", line)
+                  if word.start() <= column < word.end()), None)
+    if not token or not re.fullmatch(r"[a-z_][\w']*", token[0]):
+        return None
+    number = context.text.count('\n', 0, start) + 1
+    # GHC source spans are one-based and use eight-column tab stops.
+    first = len(line[:token.start()].expandtabs(8)) + 1
+    last = first + len(token[0])
+    cache = Path(os.environ.get('XDG_CACHE_HOME', Path.home() / '.cache')) / 'ghcide'
+    if not cache.is_absolute() or not context.file:
+        return None
+    file = Path(context.file).resolve()
+    matches = set()
+    for db in cache.glob('*.hiedb'):
+        try:
+            with closing(sqlite3.connect(db.as_uri() + '?mode=ro', uri=True, timeout=0.2)) as conn:
+                rows = conn.execute("""
+                    SELECT r.mod, r.unit, m.hieFile, m.hash FROM mods m
+                    JOIN refs r ON r.hieFile = m.hieFile
+                    WHERE m.hs_src = ? AND r.occ = ? AND r.sl = ? AND r.el = ?
+                    AND r.sc = ? AND r.ec = ? AND r.unit != m.unit
+                """, (str(file), 'v:' + token[0], number, number, first, last))
+                for module, unit, hie, fingerprint in rows:
+                    # A stale row at the same column may refer to a shadowed name.
+                    data = Path(hie).read_bytes()
+                    source = file.read_bytes()
+                    if (hashlib.md5(data).hexdigest() == fingerprint and source in data
+                            and source.decode('utf-8').replace('\r\n', '\n') == context.text):
+                        matches.add((module, unit, token[0]))
+        except (sqlite3.Error, OSError, UnicodeError):
+            continue
+    return matches.pop() if len(matches) == 1 else None
+
+
+def function_equation(source, symbol):
+    # Find the top-level equation, skipping export lists, signatures,
+    # comments and indented local bindings. Multiple clauses start at
+    # the first equation. CPP alternatives cannot be disambiguated here.
+    binding = re.compile(r'^' + re.escape(symbol) + r"(?![\w'])", re.M)
+    equations = []
+    for candidate in binding.finditer(source):
+        body = source[candidate.end():]
+        boundary = re.search(r'\n(?=[^\s])', body)
+        body = body[:boundary.start()] if boundary else body
+        if body.lstrip().startswith(('::', '∷', ',')):
+            continue
+        if re.search(r'(?<![!#$%&*+./<=>?@\\^|~:-])=(?![!#$%&*+./<=>?@\\^|~:-])', body):
+            equations.append(candidate)
+    if equations and not re.search(r'^\s*#(?:if|else|elif|endif)', source[
+            equations[0].start():equations[-1].start()], re.M):
+        return equations[0]
+    return None
+
+
+def package_module(root, module, symbol=None):
+    matches = []
+    for file in root.rglob(module.split('.')[-1] + '.hs'):
+        if not file.as_posix().endswith('/' + module.replace('.', '/') + '.hs'):
+            continue
+        source = mask_comments(file.read_text(encoding='utf-8'))
+        header = re.search(r'^[ \t]*module[ \t]+'
+                           + re.escape(module) + r"(?![\w.'])", source, re.M)
+        if header and symbol:
+            header = function_equation(source, symbol)
+        if header:
+            matches.append(Result(kind='source', path=str(file.resolve()),
+                                  line=source.count('\n', 0, header.start())))
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(f'No unique source for {module} in {root.name}')
+
+
 class Haskell:
     def probe(self, context):
         config = context.config
@@ -273,6 +353,10 @@ class Haskell:
             raise ValueError('No Cabal plan: configure ghc, ghc-pkg and exact package unit IDs')
         # With a plan, only its exact units may supply imports, never latest versions.
         units = {p['id']: (p['pkg-name'], p['pkg-version']) for p in plan['install-plan']} if plan else {}
+        self.repo_digests = {
+            p['id']: p.get('pkg-src-sha256', '') for p in (plan or {}).get('install-plan', [])
+            if p.get('pkg-src', {}).get('type') == 'repo-tar'
+        }
         databases = list(config.get('package_dbs', []))
         if plan:
             local_db = project / 'dist-newstyle/packagedb' / ('ghc-' + version)
@@ -281,7 +365,11 @@ class Haskell:
                 databases.append(str(local_db))
             if shutil.which('cabal'):
                 try:
-                    store = Path(run('cabal', 'path', '--store-dir'))
+                    try:
+                        store = Path(run('cabal', 'path', '--store-dir'))
+                    except subprocess.CalledProcessError:
+                        # Project-aware Cabal may try to refresh a read-only build plan.
+                        store = Path(run('cabal', 'path', '--ignore-project', '--store-dir'))
                     identities = ['ghc-' + version]
                     if plan.get('compiler-abi'):
                         identities.insert(0, 'ghc-' + version + '-' + plan['compiler-abi'])
@@ -315,15 +403,18 @@ class Haskell:
     def pkg_run(self, *args):
         return run(self.pkg, *self.pkg_args, *args)
 
-    def documents(self, module):
+    def module_units(self, module):
         units = self.pkg_run('find-module', module, '--simple-output', '--show-unit-ids').split()
-        documents = []
         candidates = sorted(set(units) & self.units.keys())
         if getattr(self, 'selected', []):
             candidates = [unit for unit in candidates if unit in self.selected]
         if len(candidates) > 1:
             raise ValueError('Ambiguous installed packages for ' + module + '; configure an exact package selection')
-        for unit in candidates:
+        return candidates
+
+    def documents(self, module, units):
+        documents = []
+        for unit in units:
             raw = self.pkg_run('--ipid', 'field', unit, 'haddock-html', '--simple-output')
             # ghc-pkg quotes paths containing spaces.
             dirs = package_paths(raw)
@@ -373,13 +464,28 @@ class Haskell:
                 return None
             return self.map_source(project_context, *link)
         target = import_target(context.text, context.point)
-        if not target:
+        navigation = context.mode in ('jump', 'peek')
+        occurrence = None
+        if navigation and (not target or target[1]):
+            occurrence = indexed_function(context)
+        if not target and not occurrence:
             return None
         self.probe(context)
+        if occurrence and not target:
+            module, unit, symbol = occurrence
+            return self.package_source(context, unit, module, symbol)
         module, symbol = target
         self.selected = context.config.get('packages', [])
-        docs = self.documents(module)
+        units = self.module_units(module)
+        docs = self.documents(module, units)
         if not docs:
+            if occurrence:
+                defining_module, unit, function = occurrence
+                return self.package_source(context, unit, defining_module, function)
+            if units and navigation:
+                result = self.package_source(context, units[0], module, symbol)
+                if result:
+                    return result
             raise ValueError('No exact installed Haddock for ' + module)
         unit, document = docs[0]
         link = source_link(document, symbol)
@@ -387,6 +493,15 @@ class Haskell:
         if not link:
             return Result(documentation=url, message='No local Haddock Source link')
         return self.map_source(context, *link, symbol=symbol)
+
+    def package_source(self, context, unit, module, symbol):
+        from .install import dependency_source
+        digest = self.repo_digests.get(unit)
+        if not digest or not re.fullmatch(r"[A-Z][\w']*(?:\.[A-Z][\w']*)*", module):
+            return None
+        name, version = self.units[unit]
+        root = dependency_source(cache_root(context.config), name, version, digest)
+        return package_module(root, module, symbol)
 
     def owner(self, html):
         real_module = html.stem
@@ -463,7 +578,7 @@ class Haskell:
     def prepare(self, context):
         self.probe(context)
         try:
-            existing = self.resolve(context) if context.text else None
+            existing = self.resolve(replace(context, mode="install")) if context.text else None
         except ValueError:
             existing = None  # Missing documentation must not prevent explicit installation.
         if (existing and existing.kind == 'source') or any(unit is None for _, unit in self.roots(context)):
