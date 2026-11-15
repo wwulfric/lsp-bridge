@@ -11,7 +11,8 @@ import tempfile
 import time
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
-from urllib.request import urlopen
+from urllib.parse import urlsplit
+from urllib.request import HTTPRedirectHandler, build_opener, urlopen
 
 CANCEL = None
 LAST_PROGRESS = 0
@@ -66,11 +67,20 @@ def lock(path):
                 fcntl.flock(stream, fcntl.LOCK_UN)
 
 
+class RepositoryRedirect(HTTPRedirectHandler):
+    """Follow a repository's HTTP(S) redirects, including mirror CDNs."""
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if urlsplit(newurl).scheme not in ('http', 'https'):
+            raise ValueError('Unsupported repository redirect')
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 def download(url, destination, limit, origin="https://downloads.haskell.org/"):
     digest, total = hashlib.sha256(), 0
     check_cancel()
-    with urlopen(url, timeout=15) as response, destination.open('wb') as output:
-        if not response.url.startswith(origin):
+    open_url = build_opener(RepositoryRedirect()).open if origin is None else urlopen
+    with open_url(url, timeout=15) as response, destination.open('wb') as output:
+        if origin is not None and not response.url.startswith(origin):
             raise ValueError('Unexpected download redirect')
         while True:
             check_cancel()
@@ -135,15 +145,23 @@ def extract(archive, destination):
             progress('Extracting verified sources')
 
 
-def public_hackage(repo):
-    """Recognize only Cabal remote repositories at the official Hackage roots."""
+def repository_tarball(repo, name, version):
+    """Build Cabal's package URL relative to the repository in the plan."""
     if not isinstance(repo, dict) or repo.get('type') not in ('secure-repo', 'remote-repo'):
-        return False
+        return None
     uri = repo.get('uri')
-    return isinstance(uri, str) and uri.removesuffix('/') in (
-        'http://hackage.haskell.org', 'https://hackage.haskell.org',
-        'http://hackage-content.haskell.org', 'https://hackage-content.haskell.org',
-    )
+    if not isinstance(uri, str):
+        return None
+    base = urlsplit(uri)
+    if base.scheme not in ('http', 'https') or not base.hostname:
+        return None
+    package = f'{name}-{version}.tar.gz'
+    path = base.path.rstrip('/')
+    if base.hostname == 'hackage.haskell.org' and path == '/packages/archive':
+        path += f'/{name}/{version}/{package}'
+    else:
+        path += '/package/' + package
+    return base._replace(path=path, fragment='').geturl()
 
 
 def dependency_source(cache, name, version, digest, repo):
@@ -181,11 +199,10 @@ def dependency_source(cache, name, version, digest, repo):
                 else:
                     archive.unlink(missing_ok=True)
             if not archive.exists():
-                if not public_hackage(repo):
+                url = repository_tarball(repo, name, version)
+                if not url:
                     raise ValueError('No verified local source archive for ' + package)
-                origin = 'https://hackage-content.haskell.org/'
-                url = f'{origin}package/{package}/{package}.tar.gz'
-                if download(url, archive, 256 * 1024**2, origin) != digest:
+                if download(url, archive, 256 * 1024**2, origin=None) != digest:
                     raise ValueError('Package archive differs from Cabal plan: ' + package)
             unpacked = stage / 'unpacked'
             extract(archive, unpacked)

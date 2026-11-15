@@ -14,10 +14,10 @@ with `lsp-bridge-source-python-command` if needed. For uv/pipx/launcher-based
 bridge configurations, the helper uses a directly installed Python to avoid
 implicit environment downloads. When a module import has no installed Haddock page, jump and Peek use the
 repository package and SHA-256 in the Cabal plan. The provider checks Cabal's
-tarball cache first. It downloads a missing archive only when the plan explicitly
-identifies the public Hackage repository. Private repositories, mirrors and
-entries without a recognized origin require a locally cached archive matching
-the plan's SHA-256.
+tarball cache first. On a cache miss, it requests the tarball from the HTTP(S)
+repository recorded in the plan, including mirrors and private repositories,
+and follows its HTTP(S) redirects. A missing repository URI requires a verified
+local copy. A failed download ends the lookup without trying another registry.
 After verification it caches the extracted package and opens the unique matching
 .hs module declaration. For function calls in project files, the resolver uses the local ghcide HIE
 index to identify the referenced package unit and defining module (including

@@ -196,7 +196,7 @@ class Archive(unittest.TestCase):
         archive = self.archive('example-1.0/example.cabal').read_bytes()
         digest = hashlib.sha256(archive).hexdigest()
         def download(url, destination, limit, origin):
-            self.assertTrue(url.endswith('/example-1.0/example-1.0.tar.gz'))
+            self.assertEqual(url, 'https://hackage.haskell.org/package/example-1.0.tar.gz')
             destination.write_bytes(archive)
             return digest
         repo = {'type': 'secure-repo', 'uri': 'https://hackage.haskell.org/'}
@@ -211,7 +211,7 @@ class Archive(unittest.TestCase):
                 self.assertEqual(install.dependency_source(*args), root)
                 fetch.assert_called_once()
 
-    def test_non_hackage_sources_stay_offline(self):
+    def test_unknown_source_stays_offline_and_verified_cache_is_reused(self):
         archive = self.archive('example-1.0/example.cabal').read_bytes()
         digest = hashlib.sha256(archive).hexdigest()
         repo_cache = self.root / 'repo-cache'
@@ -221,20 +221,30 @@ class Archive(unittest.TestCase):
         with patch.object(install.subprocess, 'check_output', return_value=str(repo_cache)), patch.object(
                 install, 'download', side_effect=AssertionError('unexpected network request')) as download:
             for repo in (None, {}, {'type': 'secure-repo'},
-                         {'type': 'secure-repo', 'uri': 'https://private.example/'},
-                         {'type': 'secure-repo', 'uri': 'https://hackage.haskell.org.example/'},
-                         {'type': 'secure-repo', 'uri': 'https://hackage.haskell.org/private'},
+                         {'type': 'secure-repo', 'uri': 'file:///tmp/repo'},
                          {'type': 'unknown', 'uri': 'https://hackage.haskell.org/'}):
                 with self.subTest(repo=repo), self.assertRaisesRegex(ValueError, 'No verified local'):
                     install.dependency_source(*args, repo)
             private = {'type': 'secure-repo', 'uri': 'https://private.example/'}
             local.write_bytes(b'wrong archive')
             with self.assertRaisesRegex(ValueError, 'No verified local'):
-                install.dependency_source(*args, private)
+                install.dependency_source(*args, None)
             local.write_bytes(archive)
             root = install.dependency_source(*args, private)
             self.assertTrue((root / 'example.cabal').is_file())
             download.assert_not_called()
+
+    def test_mirror_and_private_repository_cache_misses_use_only_plan_uri(self):
+        for kind, uri in [('secure-repo', 'https://mirror.example/hackage/'),
+                          ('remote-repo', 'http://packages.internal:8080/team')]:
+            repo = {'type': kind, 'uri': uri}
+            with self.subTest(uri=uri), patch.object(install.subprocess, 'check_output',
+                    return_value=str(self.root)), patch.object(install, 'download',
+                    side_effect=OSError('repository unavailable')) as fetch:
+                with self.assertRaisesRegex(OSError, 'repository unavailable'):
+                    install.dependency_source(self.root, 'example', '1.0', 'a' * 64, repo)
+                fetch.assert_called_once()
+                self.assertEqual(fetch.call_args.args[0], uri.rstrip('/') + '/package/example-1.0.tar.gz')
 
     def test_paths_and_links(self):
         for name in ['../escape', '/absolute', 'C:/escape', 'a\\..\\b', 'aux.txt', 'x.']:
