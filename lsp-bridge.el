@@ -2800,6 +2800,8 @@ active signature's parameters."
 
 (defun lsp-bridge--disable ()
   "Disable LSP Bridge mode."
+  (lsp-bridge-document-highlight-cleanup)
+  (setq lsp-bridge-document-highlight--active nil)
   ;; Remove hooks.
   (dolist (hook lsp-bridge--internal-hooks)
     (remove-hook (nth 0 hook) (nth 1 hook) (nth 3 hook)))
@@ -3571,47 +3573,102 @@ SSH tramp file name is like /ssh:user@host#port:path"
 
 (defvar lsp-bridge-document-highlight-timer nil)
 
+(defvar lsp-bridge-document-highlight--serial 0)
+(defvar-local lsp-bridge-document-highlight--request nil)
+(defvar-local lsp-bridge-document-highlight--overlays nil)
+
+(defvar-local lsp-bridge-document-highlight--active nil)
+
+(defun lsp-bridge-document-highlight--target ()
+  (when-let* ((bounds (bounds-of-thing-at-point 'symbol))
+              ((or (not (use-region-p))
+                   (equal bounds (cons (region-beginning) (region-end))))))
+    (car bounds)))
+
 (defun lsp-bridge-document-highlight ()
-  (when (and lsp-bridge-mode
-             lsp-bridge-enable-document-highlight
-             (not (minibufferp)))
-    (lsp-bridge-call-file-api "document_highlight" (lsp-bridge--position))))
+  (with-current-buffer (window-buffer (selected-window))
+    (when (and lsp-bridge-mode lsp-bridge-enable-document-highlight
+               lsp-bridge-document-highlight--active)
+      (let ((start (lsp-bridge-document-highlight--target))
+            (request lsp-bridge-document-highlight--request))
+        ;; Keep the overlays when traversing the same semantic occurrences.
+        (unless (and start request
+                     (eq (selected-window) (nth 3 request))
+                     (= (buffer-chars-modified-tick) (nth 2 request))
+                     (or (= start (nth 1 request))
+                         (seq-some (lambda (o) (overlay-get o 'lsp-bridge-usage))
+                                   (overlays-at start))))
+          (lsp-bridge-document-highlight-cleanup)
+          (when (and start (or (lsp-bridge-is-remote-file) (lsp-bridge-call-file-api-p)))
+            (setq lsp-bridge-document-highlight--request
+                  (list (cl-incf lsp-bridge-document-highlight--serial)
+                        start (buffer-chars-modified-tick) (selected-window)))
+            (save-excursion
+              (goto-char start)
+              (lsp-bridge-call-file-api "document_highlight" (lsp-bridge--position)
+                                        lsp-bridge-document-highlight--serial))))))))
 
-(defun lsp-bridge-document-highlight-render (highlights)
-  (remove-overlays (point-min) (point-max) 'face 'lsp-bridge-document-highlight-face)
-  (dolist (highlight highlights)
-    (let* ((range (plist-get highlight :range))
-           (start (plist-get range :start))
-           (end (plist-get range :end))
-           (start-line (plist-get start :line))
-           (start-character (plist-get start :character))
-           (end-line (plist-get end :line))
-           (end-character (plist-get end :character))
-           (start-pos (lsp-bridge-document-highlight--position-to-point start-line start-character))
-           (end-pos (lsp-bridge-document-highlight--position-to-point end-line end-character))
-           (overlay (make-overlay start-pos end-pos)))
-      (overlay-put overlay 'face 'lsp-bridge-document-highlight-face)
-      (overlay-put overlay 'window (selected-window)))))
+(defun lsp-bridge-document-highlight-render (serial highlights)
+  (with-current-buffer (window-buffer (selected-window))
+    (when (and lsp-bridge-mode lsp-bridge-enable-document-highlight
+               (equal lsp-bridge-document-highlight--request
+                      (list serial (lsp-bridge-document-highlight--target)
+                            (buffer-chars-modified-tick) (selected-window)))
+               (not lsp-bridge-document-highlight--overlays))
+      (save-restriction
+        (widen)
+        ;; Scope the line cursor to this reply so edits cannot invalidate it.
+        (let ((cursor (cons 0 (point-min))))
+          (dolist (highlight (sort highlights :key
+                                   (lambda (item)
+                                     (let ((range (plist-get item :range)))
+                                       (plist-get (plist-get range :start) :line)))))
+            (let* ((range (plist-get highlight :range))
+                   (start (lsp-bridge-document-highlight--point (plist-get range :start) cursor))
+                   (end (lsp-bridge-document-highlight--point (plist-get range :end) cursor))
+                   (overlay (make-overlay start end)))
+              (overlay-put overlay 'lsp-bridge-usage t)
+              (overlay-put overlay 'face (if (eq (plist-get highlight :kind) 3)
+                                             'lsp-bridge-document-highlight-write-face
+                                           'lsp-bridge-document-highlight-face))
+              (overlay-put overlay 'window (selected-window))
+              (push overlay lsp-bridge-document-highlight--overlays))))))))
 
-(defun lsp-bridge-document-highlight--position-to-point (line character)
+(defun lsp-bridge-document-highlight--point (position cursor)
+  "Convert UTF-16 POSITION to point, updating CURSOR (line . line beginning)."
   (save-excursion
-    (goto-char (point-min))
-    (forward-line line)
-    (forward-char character)
+    (let ((line (plist-get position :line)))
+      (goto-char (cdr cursor))
+      (unless (= line (car cursor))
+        (forward-line (- line (car cursor)))
+        (setcar cursor line)
+        (setcdr cursor (point))))
+    (let ((units (plist-get position :character))
+          (limit (line-end-position)))
+      (while (and (> units 0) (< (point) limit))
+        (cl-decf units (if (> (char-after) #xffff) 2 1))
+        (forward-char)))
     (point)))
 
 (defface lsp-bridge-document-highlight-face
-  '((t :inherit highlight :background "gray20"))
-  "Face for document highlight."
+  '((t :inherit highlight))
+  "Face for read and unclassified document highlights."
   :group 'lsp-bridge)
 
-(defun lsp-bridge-document-highlight-cleanup ()
-  (remove-overlays (point-min) (point-max) 'face 'lsp-bridge-document-highlight-face))
+(defface lsp-bridge-document-highlight-write-face
+  '((t :inherit lsp-bridge-document-highlight-face))
+  "Face for write accesses in document highlights."
+  :group 'lsp-bridge)
+
+(defun lsp-bridge-document-highlight-cleanup (&rest _)
+  (setq lsp-bridge-document-highlight--request nil)
+  (mapc #'delete-overlay lsp-bridge-document-highlight--overlays)
+  (setq lsp-bridge-document-highlight--overlays nil))
 
 (defun lsp-bridge-enable-document-highlight-timer ()
   (unless lsp-bridge-document-highlight-timer
     (setq lsp-bridge-document-highlight-timer
-          (run-with-idle-timer 0.5 t #'lsp-bridge-document-highlight))))
+          (run-with-idle-timer 0.06 t #'lsp-bridge-document-highlight))))
 
 (defun lsp-bridge-toggle-document-highlight ()
   "Toggle document highlight."
@@ -3628,7 +3685,7 @@ SSH tramp file name is like /ssh:user@host#port:path"
     (message "Document highlight enabled")))
 
 (defun lsp-bridge-document-highlight-setup ()
-  (add-hook 'post-command-hook #'lsp-bridge-document-highlight-cleanup nil t))
+  (setq lsp-bridge-document-highlight--active t))
 
 (provide 'lsp-bridge)
 

@@ -5,14 +5,15 @@ from core.utils import *
 class DocumentHighlight(Handler):
     name = "document_highlight"
     method = "textDocument/documentHighlight"
-    cancel_on_change = True
+    # Emacs validates the document tick and symbol, allowing movement inside it.
+    cancel_on_change = False
     provider = "document_highlight_provider"
-    provider_message = "LSP server does not support documentHighlight"
 
-    def process_request(self, position) -> dict:
+    def process_request(self, position, serial) -> dict:
+        self.serial = serial
         # textDocument will be injected by FileAction.send_server_request
         return {"position": position}
 
     def process_response(self, response: dict) -> None:
         if response is not None:
-            eval_in_emacs("lsp-bridge-document-highlight-render", response)
+            eval_in_emacs("lsp-bridge-document-highlight-render", self.serial, response)
