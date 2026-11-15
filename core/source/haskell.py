@@ -353,8 +353,8 @@ class Haskell:
             raise ValueError('No Cabal plan: configure ghc, ghc-pkg and exact package unit IDs')
         # With a plan, only its exact units may supply imports, never latest versions.
         units = {p['id']: (p['pkg-name'], p['pkg-version']) for p in plan['install-plan']} if plan else {}
-        self.repo_digests = {
-            p['id']: p.get('pkg-src-sha256', '') for p in (plan or {}).get('install-plan', [])
+        self.repo_sources = {
+            p['id']: (p.get('pkg-src-sha256'), p['pkg-src'].get('repo')) for p in (plan or {}).get('install-plan', [])
             if p.get('pkg-src', {}).get('type') == 'repo-tar'
         }
         databases = list(config.get('package_dbs', []))
@@ -496,11 +496,11 @@ class Haskell:
 
     def package_source(self, context, unit, module, symbol):
         from .install import dependency_source
-        digest = self.repo_digests.get(unit)
+        digest, repo = self.repo_sources.get(unit, (None, None))
         if not digest or not re.fullmatch(r"[A-Z][\w']*(?:\.[A-Z][\w']*)*", module):
             return None
         name, version = self.units[unit]
-        root = dependency_source(cache_root(context.config), name, version, digest)
+        root = dependency_source(cache_root(context.config), name, version, digest, repo)
         return package_module(root, module, symbol)
 
     def owner(self, html):

@@ -69,7 +69,7 @@ class Mapping(unittest.TestCase):
                                        'cache': str(self.root / 'cache')})
         self.provider = Haskell()
         def probe(context):
-            self.provider.repo_digests = getattr(self.provider, 'repo_digests', {})
+            self.provider.repo_sources = getattr(self.provider, 'repo_sources', {})
             self.provider.version = '9.12.2'
             self.provider.units = {'base-unit': ('base','4.21'), 'internal-unit': ('ghc-internal','9.1202')}
             return {}
@@ -111,13 +111,13 @@ class Mapping(unittest.TestCase):
     def test_no_haddock_uses_exact_repository_source(self):
         self.document.unlink()
         self.context.point = self.context.text.index('Traversable')
-        self.provider.repo_digests = {'base-unit': 'a' * 64}
+        self.provider.repo_sources = {'base-unit': ('a' * 64, None)}
         module = self.src / 'Data/Traversable.hs'
         module.parent.mkdir()
         module.write_text('-- header\nmodule Data.Traversable where\n')
         with patch.object(install, 'dependency_source', return_value=self.src) as acquire:
             result = self.provider.resolve(self.context)
-        acquire.assert_called_once_with(cache_root(self.context.config), 'base', '4.21', 'a' * 64)
+        acquire.assert_called_once_with(cache_root(self.context.config), 'base', '4.21', 'a' * 64, None)
         self.assertEqual((result.path, result.line), (str(module.resolve()), 1))
 
     def test_indexed_call_resolves_defining_unit_and_equation(self):
@@ -142,7 +142,7 @@ class Mapping(unittest.TestCase):
         db.close()
         module = self.src / 'Internal.hs'
         module.write_text('module Internal where\nchoose :: Int -> Int\nchoose n\n  | n > 0 = n\nchoose _ = 0\n')
-        self.provider.repo_digests = {'internal-unit': 'a' * 64}
+        self.provider.repo_sources = {'internal-unit': ('a' * 64, None)}
         with patch.dict('os.environ', XDG_CACHE_HOME=str(self.root)), patch.object(
                 install, 'dependency_source', return_value=self.src) as acquire:
             result = self.provider.resolve(self.context)
@@ -199,7 +199,8 @@ class Archive(unittest.TestCase):
             self.assertTrue(url.endswith('/example-1.0/example-1.0.tar.gz'))
             destination.write_bytes(archive)
             return digest
-        args = (self.root, 'example', '1.0', digest)
+        repo = {'type': 'secure-repo', 'uri': 'https://hackage.haskell.org/'}
+        args = (self.root, 'example', '1.0', digest, repo)
         with patch.object(install.subprocess, 'check_output', return_value=str(self.root)):
             with patch.object(install, 'download', return_value='0' * 64):
                 with self.assertRaisesRegex(ValueError, 'differs from Cabal plan'):
@@ -209,6 +210,31 @@ class Archive(unittest.TestCase):
                 self.assertTrue((root / 'example.cabal').is_file())
                 self.assertEqual(install.dependency_source(*args), root)
                 fetch.assert_called_once()
+
+    def test_non_hackage_sources_stay_offline(self):
+        archive = self.archive('example-1.0/example.cabal').read_bytes()
+        digest = hashlib.sha256(archive).hexdigest()
+        repo_cache = self.root / 'repo-cache'
+        local = repo_cache / 'private/example/1.0/example-1.0.tar.gz'
+        local.parent.mkdir(parents=True)
+        args = (self.root, 'example', '1.0', digest)
+        with patch.object(install.subprocess, 'check_output', return_value=str(repo_cache)), patch.object(
+                install, 'download', side_effect=AssertionError('unexpected network request')) as download:
+            for repo in (None, {}, {'type': 'secure-repo'},
+                         {'type': 'secure-repo', 'uri': 'https://private.example/'},
+                         {'type': 'secure-repo', 'uri': 'https://hackage.haskell.org.example/'},
+                         {'type': 'secure-repo', 'uri': 'https://hackage.haskell.org/private'},
+                         {'type': 'unknown', 'uri': 'https://hackage.haskell.org/'}):
+                with self.subTest(repo=repo), self.assertRaisesRegex(ValueError, 'No verified local'):
+                    install.dependency_source(*args, repo)
+            private = {'type': 'secure-repo', 'uri': 'https://private.example/'}
+            local.write_bytes(b'wrong archive')
+            with self.assertRaisesRegex(ValueError, 'No verified local'):
+                install.dependency_source(*args, private)
+            local.write_bytes(archive)
+            root = install.dependency_source(*args, private)
+            self.assertTrue((root / 'example.cabal').is_file())
+            download.assert_not_called()
 
     def test_paths_and_links(self):
         for name in ['../escape', '/absolute', 'C:/escape', 'a\\..\\b', 'aux.txt', 'x.']:

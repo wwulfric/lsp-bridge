@@ -135,7 +135,18 @@ def extract(archive, destination):
             progress('Extracting verified sources')
 
 
-def dependency_source(cache, name, version, digest):
+def public_hackage(repo):
+    """Recognize only Cabal remote repositories at the official Hackage roots."""
+    if not isinstance(repo, dict) or repo.get('type') not in ('secure-repo', 'remote-repo'):
+        return False
+    uri = repo.get('uri')
+    return isinstance(uri, str) and uri.removesuffix('/') in (
+        'http://hackage.haskell.org', 'https://hackage.haskell.org',
+        'http://hackage-content.haskell.org', 'https://hackage-content.haskell.org',
+    )
+
+
+def dependency_source(cache, name, version, digest, repo):
     """Publish the Cabal plan's exact source tarball once across resolvers."""
     if not (re.fullmatch(r'[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*', name)
             and re.fullmatch(r'\d+(?:\.\d+)*', version)
@@ -170,6 +181,8 @@ def dependency_source(cache, name, version, digest):
                 else:
                     archive.unlink(missing_ok=True)
             if not archive.exists():
+                if not public_hackage(repo):
+                    raise ValueError('No verified local source archive for ' + package)
                 origin = 'https://hackage-content.haskell.org/'
                 url = f'{origin}package/{package}/{package}.tar.gz'
                 if download(url, archive, 256 * 1024**2, origin) != digest:
